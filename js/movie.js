@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=14';
-import { getWatchUrl } from './config.js?v=14';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=14';
-import { hasInList, toggleInList } from './storage.js?v=14';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=15';
+import { getWatchUrl } from './config.js?v=15';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=15';
+import { hasInList, toggleInList } from './storage.js?v=15';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);

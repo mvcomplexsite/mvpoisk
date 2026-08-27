@@ -1,6 +1,6 @@
-import { CONFIG } from './config.js?v=14';
-import { getMovies, searchMovies } from './api.js?v=14';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=14';
+import { CONFIG } from './config.js?v=15';
+import { getMovies, searchMovies } from './api.js?v=15';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=15';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -9,6 +9,7 @@ const resultCount = $('#resultCount');
 const catalogTitle = $('#catalogTitle');
 const pagination = $('#pagination');
 const pageIndicator = $('#pageIndicator');
+const paginationPages = $('#paginationPages');
 
 const state = {
   mode: 'catalog',
@@ -125,10 +126,45 @@ function renderResults(data) {
   bindImageFallbacks(grid);
   if (!docs.length) showNotice('Ничего не найдено. Попробуй изменить запрос или фильтры.');
 
+  renderPagination();
+}
+
+function renderPagination() {
   pagination.hidden = state.pages <= 1;
+  if (state.pages <= 1) return;
+
   pageIndicator.textContent = `${state.page} / ${state.pages}`;
+  $('#firstPage').disabled = state.page <= 1;
   $('#prevPage').disabled = state.page <= 1;
-  $('#nextPage').disabled = state.page >= state.pages || state.page >= 10;
+  $('#nextPage').disabled = state.page >= state.pages;
+  $('#lastPage').disabled = state.page >= state.pages;
+
+  // Показываем компактное окно вокруг текущей страницы, не создавая сотни кнопок.
+  const visible = new Set([1, state.pages]);
+  for (let page = Math.max(1, state.page - 2); page <= Math.min(state.pages, state.page + 2); page++) {
+    visible.add(page);
+  }
+  const pages = [...visible].sort((a, b) => a - b);
+  const chunks = [];
+  let previous = null;
+
+  for (const page of pages) {
+    if (previous !== null && page - previous > 1) {
+      chunks.push('<span class="pagination-ellipsis" aria-hidden="true">…</span>');
+    }
+    chunks.push(`<button type="button" class="pagination-number${page === state.page ? ' active' : ''}" data-page="${page}"${page === state.page ? ' aria-current="page"' : ''}>${page}</button>`);
+    previous = page;
+  }
+  paginationPages.innerHTML = chunks.join('');
+}
+
+async function goToPage(page) {
+  const target = Math.min(state.pages, Math.max(1, Number(page) || 1));
+  if (target === state.page) return;
+  state.page = target;
+  if (state.mode === 'search') await performSearch(state.query, target);
+  else await loadCatalog();
+  document.querySelector('#discover')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 let suggestTimer;
@@ -217,16 +253,15 @@ document.querySelectorAll('[data-quick-filter]').forEach(button => {
   });
 });
 
-$('#prevPage').addEventListener('click', () => {
-  if (state.page <= 1) return;
-  state.page--;
-  state.mode === 'search' ? performSearch(state.query, state.page) : loadCatalog();
-});
+$('#firstPage').addEventListener('click', () => goToPage(1));
+$('#prevPage').addEventListener('click', () => goToPage(state.page - 1));
+$('#nextPage').addEventListener('click', () => goToPage(state.page + 1));
+$('#lastPage').addEventListener('click', () => goToPage(state.pages));
 
-$('#nextPage').addEventListener('click', () => {
-  if (state.page >= state.pages || state.page >= 10) return;
-  state.page++;
-  state.mode === 'search' ? performSearch(state.query, state.page) : loadCatalog();
+paginationPages.addEventListener('click', event => {
+  const button = event.target.closest('[data-page]');
+  if (!button) return;
+  goToPage(Number(button.dataset.page));
 });
 
 loadCatalog();

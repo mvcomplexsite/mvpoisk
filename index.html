@@ -11,7 +11,7 @@
   <meta name="description" content="MVPoisk — поиск фильмов и сериалов, рейтинги, отзывы и информация о кино." />
   <title>MVPoisk — фильмы и сериалы</title>
   <link rel="preconnect" href="https://api.poiskkino.dev" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=14" />
+  <link rel="stylesheet" href="styles.css?v=15" />
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -112,10 +112,13 @@
       <div class="notice" id="statusNotice" hidden></div>
       <div class="movie-grid" id="movieGrid" aria-live="polite"></div>
 
-      <div class="pagination" id="pagination" hidden>
+      <div class="pagination" id="pagination" hidden aria-label="Навигация по страницам">
+        <button type="button" id="firstPage" class="pagination-edge" title="Первая страница">« В начало</button>
         <button type="button" id="prevPage">← Назад</button>
-        <span id="pageIndicator">1</span>
+        <div class="pagination-pages" id="paginationPages" aria-label="Номера страниц"></div>
+        <span id="pageIndicator" class="page-indicator">1 / 1</span>
         <button type="button" id="nextPage">Вперёд →</button>
+        <button type="button" id="lastPage" class="pagination-edge" title="Последняя страница">В конец »</button>
       </div>
     </section>
   </main>
@@ -125,7 +128,7 @@
     <p>Информация о кино предоставляется через ПоискКино API.</p>
   </footer>
 
-  <script type="module" src="js/common.js?v=14"></script>
-  <script type="module" src="js/app.js?v=14"></script>
+  <script type="module" src="js/common.js?v=15"></script>
+  <script type="module" src="js/app.js?v=15"></script>
 </body>
 </html>

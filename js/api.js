@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js?v=14';
+import { CONFIG } from './config.js?v=15';
 
 const memoryCache = new Map();
 

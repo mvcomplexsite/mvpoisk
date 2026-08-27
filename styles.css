@@ -67,3 +67,21 @@ img[hidden]{display:none!important}
 @media(max-width:800px){.movie-header-tools{gap:10px}.movie-header-tools .back-link:nth-child(1){display:none}.library-page{padding-top:90px}.library-title-row{align-items:flex-start;flex-direction:column}.profile-pill{align-self:flex-start}.library-title-row h1{font-size:58px}.nav-profile{display:none}.movie-actions-primary .watch-button{flex-basis:100%}}
 @media(max-width:700px){.review-copy.review-collapsed{-webkit-line-clamp:4}.review-card{padding:18px}.movie-header-tools{gap:9px}.movie-header-tools .nav-install{display:none}.library-tabs{overflow-x:auto}.library-tab{white-space:nowrap}.install-toast{left:14px;right:14px;bottom:14px;width:auto}.modal-card{margin-top:8vh;padding:24px}.nav-saved{font-size:12px}}
 @media(max-width:470px){.movie-actions-primary{display:grid;grid-template-columns:1fr 1fr}.movie-actions-primary .watch-button{grid-column:1/-1}.movie-actions-primary .secondary-button{width:100%;padding:0 10px;font-size:12px}.library-title-row h1{font-size:48px;letter-spacing:-3px}.library-page{width:min(100% - 24px,1180px)}.saved-remove{height:38px}}
+
+
+/* Pagination v15 */
+.pagination{flex-wrap:wrap;gap:10px 8px;margin:45px 0 20px}
+.pagination-pages{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
+.pagination .pagination-number{min-width:40px;padding:10px 11px}
+.pagination .pagination-number.active{background:#fff;color:#0b0a10;border-color:#fff;font-weight:800}
+.pagination-ellipsis{display:inline-grid;place-items:center;min-width:26px;color:var(--muted);font-size:13px}
+.page-indicator{min-width:68px;text-align:center}
+@media(max-width:700px){
+  .pagination{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .pagination-pages{grid-column:1/-1;grid-row:1;overflow-x:auto;justify-content:flex-start;padding:2px 1px 6px;scrollbar-width:thin}
+  .page-indicator{grid-column:1/-1;grid-row:2;text-align:center;padding:2px 0 4px}
+  .pagination #prevPage,.pagination #nextPage{grid-row:3}
+  .pagination #firstPage,.pagination #lastPage{grid-row:4}
+  .pagination button{width:100%;min-height:42px}
+  .pagination .pagination-number{width:auto;flex:0 0 auto;min-width:42px}
+}
