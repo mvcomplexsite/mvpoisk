@@ -66,3 +66,11 @@ img[hidden]{display:none!important}
 .mv-player-frame-host{position:relative;width:100%;aspect-ratio:16/9;min-height:360px;background:#111;overflow:hidden}
 .mv-player-frame{display:block;width:100%;height:100%;position:absolute;inset:0;border:0;background:#111}
 @media (max-width:700px){.mv-player-frame-host{min-height:0;aspect-ratio:16/9}.mv-player-source{font-size:12px;padding:8px 10px}}
+
+
+/* MVPoisk v8: official Kinobox embed */
+#kinoboxPlayer.kinobox_player{position:relative;z-index:2;width:100%;height:100%;min-height:100%;background:#111}
+#kinoboxPlayer.kinobox_player>section{width:100%;height:100%;min-height:100%}
+#kinoboxPlayer.kinobox_player iframe{max-width:100%;border:0}
+.player-shell[data-state="ready"] #kinoboxPlayer{opacity:1}
+.player-shell[data-state="loading"] #kinoboxPlayer{opacity:.92}

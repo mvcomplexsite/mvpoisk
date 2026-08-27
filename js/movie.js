@@ -1,6 +1,6 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=7';
-import { CONFIG, getWatchUrl } from './config.js?v=7';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=7';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=8';
+import { CONFIG, getWatchUrl } from './config.js?v=8';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=8';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -21,10 +21,10 @@ function firstText(...values) { return values.find(v => typeof v === 'string' &&
 
 
 let playerInitStarted = false;
-let playerProtectedMode = true;
-let activePlayerFrame = null;
-let activePlayerSources = [];
-let activeSourceIndex = 0;
+let kinoboxScriptPromise = null;
+let playerProtectionEnabled = false;
+let playerObserver = null;
+let playerWatchdog = null;
 
 function setPlayerState(state, message) {
   const shell = document.querySelector('#playerShell');
@@ -39,171 +39,145 @@ function setPlayerSourceLabel(text = '') {
   if (label) label.textContent = text;
 }
 
-function safeHttpUrl(value) {
-  try {
-    const url = new URL(String(value || ''));
-    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
-  } catch {
-    return '';
+function loadOfficialKinoboxScript() {
+  if (typeof window.kbox === 'function' || typeof window.Kinobox === 'function') {
+    return Promise.resolve();
+  }
+  if (kinoboxScriptPromise) return kinoboxScriptPromise;
+
+  kinoboxScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-mvpoisk-kinobox]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('Kinobox script blocked')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://kinobox.tv/kinobox.min.js?mvpoisk=v8';
+    script.async = true;
+    script.dataset.mvpoiskKinobox = 'v8';
+
+    const timer = setTimeout(() => {
+      reject(new Error('Kinobox script timeout'));
+    }, 15000);
+
+    script.onload = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    script.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error('Kinobox script blocked'));
+    };
+    document.head.appendChild(script);
+  });
+
+  return kinoboxScriptPromise;
+}
+
+function getKinoboxSearch(movie) {
+  const search = { kinopoisk: String(movie.id) };
+  if (movie.externalId?.imdb) search.imdb = String(movie.externalId.imdb);
+  if (movie.externalId?.tmdb) search.tmdb = String(movie.externalId.tmdb);
+  if (movie.name || movie.alternativeName) search.title = String(movie.name || movie.alternativeName);
+  return search;
+}
+
+function getKinoboxFrames() {
+  return [...document.querySelectorAll('#kinoboxPlayer iframe')];
+}
+
+function prepareKinoboxFrame(frame) {
+  if (!(frame instanceof HTMLIFrameElement)) return;
+  frame.classList.add('mv-player-frame');
+  frame.allowFullscreen = true;
+  frame.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
+  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+}
+
+function refreshFrameWithProtection(frame, enabled) {
+  if (!(frame instanceof HTMLIFrameElement)) return;
+  prepareKinoboxFrame(frame);
+  const src = frame.getAttribute('src') || '';
+
+  if (enabled) {
+    // This blocks popup windows and top-level redirects from the embedded balance player.
+    frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-presentation');
+  } else {
+    frame.removeAttribute('sandbox');
+  }
+
+  // Sandbox changes apply reliably after a navigation, so reload only when the user toggles it.
+  if (src && src !== 'about:blank') {
+    frame.setAttribute('src', 'about:blank');
+    requestAnimationFrame(() => frame.setAttribute('src', src));
   }
 }
 
-function normalizePlayerPayload(payload) {
-  let rows = [];
-  if (Array.isArray(payload)) rows = payload;
-  else if (Array.isArray(payload?.data)) rows = payload.data;
-  else if (Array.isArray(payload?.sources)) rows = payload.sources;
-
-  return rows
-    .filter(item => item && item.success !== false)
-    .map((item, index) => {
-      const translations = Array.isArray(item.translations) ? item.translations : [];
-      const direct = safeHttpUrl(item.iframeUrl || item.iframe_url || item.url);
-      const translated = translations.map(t => safeHttpUrl(t?.iframeUrl || t?.iframe_url || t?.url)).find(Boolean) || '';
-      const iframeUrl = direct || translated;
-      const source = String(item.source || item.type || item.name || `Источник ${index + 1}`);
-      const quality = translations.map(t => t?.quality).find(Boolean) || item.quality || '';
-      return { source, iframeUrl, quality, translations };
-    })
-    .filter(item => item.iframeUrl);
+function markKinoboxReady(message = '') {
+  clearTimeout(playerWatchdog);
+  setPlayerState('ready', '');
+  const button = document.querySelector('#watchButton');
+  const protectionButton = document.querySelector('#compatibilityButton');
+  button?.removeAttribute('aria-busy');
+  button?.classList.remove('is-loading');
+  if (button) button.textContent = '▶ Плеер открыт';
+  if (protectionButton) {
+    protectionButton.hidden = false;
+    protectionButton.disabled = false;
+    protectionButton.textContent = playerProtectionEnabled
+      ? 'Отключить защиту (совместимость)'
+      : 'Включить защиту от pop-up';
+  }
+  setPlayerSourceLabel(message || `Официальный Kinobox • ${playerProtectionEnabled ? 'защита от pop-up включена' : 'режим совместимости'}`);
 }
 
-function playerSearchCandidates(movie) {
-  const candidates = [];
-  const push = (key, value, label) => {
-    const v = String(value ?? '').trim();
-    if (!v) return;
-    if (candidates.some(item => item.key === key && item.value === v)) return;
-    candidates.push({ key, value: v, label });
+function watchKinoboxFrames(container) {
+  playerObserver?.disconnect();
+  const scan = () => {
+    const frames = getKinoboxFrames();
+    frames.forEach(prepareKinoboxFrame);
+    const realFrame = frames.find(frame => {
+      const src = frame.getAttribute('src') || '';
+      return src && src !== 'about:blank';
+    });
+    if (realFrame) {
+      markKinoboxReady(`Официальный Kinobox • встроенный источник загружен • ${playerProtectionEnabled ? 'защита от pop-up включена' : 'AdGuard можно оставить включённым'}`);
+    }
   };
 
-  push('kinopoisk', movie.id, `KinoPoisk ID ${movie.id}`);
-  push('imdb', movie.externalId?.imdb, `IMDb ${movie.externalId?.imdb || ''}`);
-  push('tmdb', movie.externalId?.tmdb, `TMDB ${movie.externalId?.tmdb || ''}`);
-  push('title', movie.name || movie.alternativeName, `название «${movie.name || movie.alternativeName || ''}»`);
-  return candidates;
+  playerObserver = new MutationObserver(scan);
+  playerObserver.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  scan();
 }
 
-function buildPlayerApiUrl(api, candidate) {
-  const url = new URL(api.url);
-  url.searchParams.set(candidate.key, candidate.value);
-  return url.toString();
-}
+function togglePlayerProtection() {
+  const frames = getKinoboxFrames();
+  const button = document.querySelector('#compatibilityButton');
+  if (!frames.length) return;
 
-async function fetchJsonWithTimeout(url, timeoutMs = CONFIG.PLAYER_API_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      mode: 'cors',
-      credentials: 'omit',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } finally {
-    clearTimeout(timer);
+  playerProtectionEnabled = !playerProtectionEnabled;
+  frames.forEach(frame => refreshFrameWithProtection(frame, playerProtectionEnabled));
+
+  if (button) {
+    button.textContent = playerProtectionEnabled
+      ? 'Отключить защиту (совместимость)'
+      : 'Включить защиту от pop-up';
   }
-}
-
-async function fetchPlayerSources(api, candidate) {
-  const targetUrl = buildPlayerApiUrl(api, candidate);
-  const routes = [
-    { name: 'напрямую', url: targetUrl },
-    ...(CONFIG.PLAYER_CORS_PROXIES || []).map(proxy => ({
-      name: `через ${proxy.name}`,
-      url: proxy.build(targetUrl),
-    })),
-  ];
-
-  const attempts = routes.map(async route => {
-    const payload = await fetchJsonWithTimeout(route.url);
-    const sources = normalizePlayerPayload(payload);
-    if (!sources.length) throw new Error('источники не найдены');
-    return { sources, route: route.name };
-  });
-
-  try {
-    return await Promise.any(attempts);
-  } catch (aggregate) {
-    const details = (aggregate?.errors || []).map(err => err?.name === 'AbortError' ? 'таймаут' : (err?.message || 'ошибка сети'));
-    throw new Error(details.join(' / ') || 'ошибка сети');
-  }
-}
-
-function hardenIframe(iframe) {
-  if (!(iframe instanceof HTMLIFrameElement)) return;
-  iframe.allowFullscreen = true;
-  iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
-  iframe.setAttribute('referrerpolicy', 'no-referrer');
-  if (playerProtectedMode) {
-    // No allow-popups / allow-top-navigation: common popup and tab ads are blocked.
-    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-presentation');
-  } else {
-    iframe.removeAttribute('sandbox');
-  }
-}
-
-function sourceButtonLabel(source, index) {
-  const quality = source.quality ? ` • ${source.quality}` : '';
-  return `${index + 1}. ${source.source}${quality}`;
-}
-
-function showPlayerSource(index) {
-  const container = document.querySelector('#kinoboxPlayer');
-  if (!container || !activePlayerSources[index]) return;
-  activeSourceIndex = index;
-  const source = activePlayerSources[index];
-
-  container.querySelectorAll('.mv-player-source').forEach((button, buttonIndex) => {
-    button.classList.toggle('is-active', buttonIndex === index);
-    button.setAttribute('aria-pressed', buttonIndex === index ? 'true' : 'false');
-  });
-
-  const frameHost = container.querySelector('.mv-player-frame-host');
-  if (!frameHost) return;
-  frameHost.innerHTML = '';
-
-  const iframe = document.createElement('iframe');
-  iframe.className = 'mv-player-frame';
-  iframe.src = source.iframeUrl;
-  iframe.title = `Плеер ${source.source}`;
-  iframe.loading = 'eager';
-  hardenIframe(iframe);
-  frameHost.appendChild(iframe);
-  activePlayerFrame = iframe;
-
-  setPlayerSourceLabel(`Источник: ${source.source} • ${playerProtectedMode ? 'защита от pop-up включена' : 'режим совместимости'}`);
-}
-
-function renderPlayerSources(sources) {
-  const container = document.querySelector('#kinoboxPlayer');
-  if (!container) return;
-  activePlayerSources = sources;
-  activeSourceIndex = 0;
-
-  container.innerHTML = `
-    <div class="mv-player-toolbar" aria-label="Источники просмотра">
-      ${sources.map((source, index) => `<button class="mv-player-source${index === 0 ? ' is-active' : ''}" type="button" aria-pressed="${index === 0 ? 'true' : 'false'}" data-player-index="${index}">${esc(sourceButtonLabel(source, index))}</button>`).join('')}
-    </div>
-    <div class="mv-player-frame-host"></div>`;
-
-  container.querySelectorAll('.mv-player-source').forEach(button => {
-    button.addEventListener('click', () => showPlayerSource(Number(button.dataset.playerIndex)));
-  });
-  showPlayerSource(0);
+  setPlayerSourceLabel(playerProtectionEnabled
+    ? 'Дополнительная защита MVPoisk включена: pop-up и переходы верхнего окна запрещены. Если плеер сломается — включите совместимость.'
+    : 'Режим совместимости: sandbox отключён. AdGuard при этом можно оставить включённым.');
 }
 
 async function initEmbeddedPlayer(movie) {
   const section = document.querySelector('#watchSection');
   const container = document.querySelector('#kinoboxPlayer');
   const button = document.querySelector('#watchButton');
-  const compatibilityButton = document.querySelector('#compatibilityButton');
-  if (!section || !container || playerInitStarted) {
-    section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!section || !container) return;
+
+  if (playerInitStarted) {
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
 
@@ -211,73 +185,98 @@ async function initEmbeddedPlayer(movie) {
   section.hidden = false;
   button?.setAttribute('aria-busy', 'true');
   button?.classList.add('is-loading');
-  container.innerHTML = '';
-  setPlayerState('loading', 'Ищем доступные источники просмотра…');
-  setPlayerSourceLabel('');
+  setPlayerState('loading', 'Подключаем официальный Kinobox…');
+  setPlayerSourceLabel('Список источников получает официальный скрипт Kinobox — без браузерного CORS-proxy MVPoisk.');
   section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  const errors = [];
-  let selectedApi = null;
-  let selectedCandidate = null;
-  let selectedRoute = null;
-  let sources = null;
-  const candidates = playerSearchCandidates(movie);
+  container.innerHTML = '';
+  container.classList.add('kinobox_player');
+  watchKinoboxFrames(container);
 
-  outer:
-  for (const candidate of candidates) {
-    for (const api of CONFIG.PLAYER_APIS) {
-      setPlayerState('loading', `Ищем по ${candidate.label}: ${api.name}…`);
-      try {
-        const result = await fetchPlayerSources(api, candidate);
-        if (result.sources.length) {
-          selectedApi = api;
-          selectedCandidate = candidate;
-          selectedRoute = result.route;
-          sources = result.sources;
-          break outer;
-        }
-      } catch (error) {
-        const reason = error?.message || 'ошибка сети';
-        errors.push(`${api.name}/${candidate.key}: ${reason}`);
-        console.warn('MVPoisk player API failed:', api.url, candidate, error);
-      }
+  let loadedEventHandled = false;
+  const onLoaded = (event) => {
+    loadedEventHandled = true;
+    const detail = event?.detail || {};
+    const sources = Array.isArray(detail.sources)
+      ? detail.sources
+      : Array.isArray(detail.data)
+        ? detail.data
+        : Array.isArray(detail.data?.data)
+          ? detail.data.data
+          : [];
+    const working = sources.filter(source => source && source.success !== false);
+
+    if (working.length) {
+      markKinoboxReady(`Официальный Kinobox • найдено источников: ${working.length} • AdGuard можно оставить включённым`);
+    } else if (detail.status === false) {
+      clearTimeout(playerWatchdog);
+      setPlayerState('error', 'Kinobox загрузился, но не нашёл доступных источников для этого фильма. Резервная ссылка на GGpoisk остаётся ниже.');
+      setPlayerSourceLabel('Официальный Kinobox ответил без доступных источников.');
+      button?.removeAttribute('aria-busy');
+      button?.classList.remove('is-loading');
+      playerInitStarted = false;
     }
-  }
+  };
+  document.addEventListener('KinoboxPlayerLoaded', onLoaded, { once: true });
 
-  if (!sources?.length) {
-    setPlayerState('error', 'Не удалось получить список плееров. Попробовали KinoPoisk ID и резервные идентификаторы. Ссылка на GGpoisk остаётся ниже.');
-    setPlayerSourceLabel(errors.slice(-4).join(' • '));
+  try {
+    await loadOfficialKinoboxScript();
+
+    const options = {
+      search: getKinoboxSearch(movie),
+      menu: {
+        enable: true,
+        default: 'menu_list',
+        mobile: 'menu_button',
+        format: '{N} :: {S} — {T} ({Q})',
+        limit: 10,
+        open: false,
+      },
+      notFoundMessage: 'Видео не найдено.',
+      events: {
+        playerLoaded(status, sources) {
+          loadedEventHandled = true;
+          if (status && Array.isArray(sources) && sources.length) {
+            markKinoboxReady(`Официальный Kinobox • найдено источников: ${sources.length} • AdGuard можно оставить включённым`);
+          }
+        },
+      },
+    };
+
+    if (typeof window.kbox === 'function') {
+      window.kbox(container, options);
+    } else if (typeof window.Kinobox === 'function') {
+      const instance = new window.Kinobox(container, options);
+      if (typeof instance.init === 'function') instance.init();
+    } else {
+      throw new Error('Kinobox API function not found after script load');
+    }
+
+    playerWatchdog = setTimeout(() => {
+      const frames = getKinoboxFrames();
+      const hasFrame = frames.some(frame => {
+        const src = frame.getAttribute('src') || '';
+        return src && src !== 'about:blank';
+      });
+      if (hasFrame) {
+        markKinoboxReady('Официальный Kinobox • iframe плеера создан • AdGuard можно оставить включённым');
+        return;
+      }
+
+      setPlayerState('error', 'Официальный Kinobox не создал плеер за 25 секунд. Это уже похоже на блокировку Kinobox/балансеров в сети или расширением. Резервная ссылка на GGpoisk остаётся ниже.');
+      setPlayerSourceLabel(loadedEventHandled ? 'Kinobox ответил, но iframe не появился.' : 'Событие KinoboxPlayerLoaded не пришло. Проверьте блокировку kinobox.tv в AdGuard/DNS.');
+      button?.removeAttribute('aria-busy');
+      button?.classList.remove('is-loading');
+      playerInitStarted = false;
+    }, 25000);
+  } catch (error) {
+    clearTimeout(playerWatchdog);
+    console.error('MVPoisk official Kinobox failed:', error);
+    setPlayerState('error', 'Не удалось загрузить официальный скрипт Kinobox. Резервная ссылка на GGpoisk остаётся ниже.');
+    setPlayerSourceLabel(error?.message || 'Kinobox script error');
     button?.removeAttribute('aria-busy');
     button?.classList.remove('is-loading');
     playerInitStarted = false;
-    return;
-  }
-
-  renderPlayerSources(sources);
-  setPlayerState('ready', '');
-  setPlayerSourceLabel(`${selectedApi.name} • ${selectedCandidate.label} • ${selectedRoute}: найдено ${sources.length} • защита от pop-up включена`);
-  button?.removeAttribute('aria-busy');
-  button?.classList.remove('is-loading');
-  if (button) button.textContent = '▶ Плеер открыт';
-  if (compatibilityButton) compatibilityButton.hidden = false;
-}
-
-function enableCompatibilityMode() {
-  const button = document.querySelector('#compatibilityButton');
-  if (!activePlayerFrame || !playerProtectedMode) return;
-
-  playerProtectedMode = false;
-  const src = activePlayerFrame.src;
-  activePlayerFrame.removeAttribute('sandbox');
-  setPlayerSourceLabel(`Источник: ${activePlayerSources[activeSourceIndex]?.source || 'плеер'} • режим совместимости • защита от pop-up отключена`);
-  if (button) {
-    button.textContent = 'Режим совместимости включён';
-    button.disabled = true;
-  }
-
-  if (src) {
-    activePlayerFrame.src = 'about:blank';
-    requestAnimationFrame(() => { activePlayerFrame.src = src; });
   }
 }
 
@@ -394,7 +393,7 @@ function renderMovie(movie) {
   bindImageFallbacks(root);
 
   document.querySelector('#watchButton')?.addEventListener('click', () => initEmbeddedPlayer(movie));
-  document.querySelector('#compatibilityButton')?.addEventListener('click', enableCompatibilityMode);
+  document.querySelector('#compatibilityButton')?.addEventListener('click', togglePlayerProtection);
 
   if (location.hash === '#watch') {
     window.setTimeout(() => initEmbeddedPlayer(movie), 100);

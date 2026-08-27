@@ -38,3 +38,10 @@ The embedded player no longer relies on the uploaded Kinobox bootstrap script to
 - Search falls back from KinoPoisk ID to IMDb, TMDB and title when available.
 - All HTML and ES-module URLs are cache-busted with v=7 to avoid stale browser copies.
 - Each discovery request has a hard timeout.
+
+
+## v8 — официальный Kinobox
+
+Встроенный просмотр теперь запускается через официальный `https://kinobox.tv/kinobox.min.js`, как рекомендует документация Kinobox. MVPoisk больше не делает браузерные `fetch()` к `/api/players` и не зависит от публичного CORS proxy. Поиск передаёт KinoPoisk ID, IMDb, TMDB и название как резервные идентификаторы.
+
+По умолчанию плеер работает в режиме совместимости, чтобы не ломать балансеры. После успешной загрузки можно включить дополнительную защиту от pop-up; AdGuard при этом можно оставить включённым.
