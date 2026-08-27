@@ -4,10 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#07070b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <meta name="description" content="MVPoisk — поиск фильмов и сериалов, рейтинги, отзывы и информация о кино." />
   <title>MVPoisk — фильмы и сериалы</title>
   <link rel="preconnect" href="https://api.poiskkino.dev" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=13" />
+  <link rel="stylesheet" href="styles.css?v=14" />
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -21,6 +25,9 @@
       <a href="#discover">Фильмы</a>
       <button class="nav-link" type="button" data-quick-filter="series">Сериалы</button>
       <button class="nav-link" type="button" data-quick-filter="top">Топ</button>
+      <a class="nav-saved" href="my.html">Моё <span class="nav-count" data-list-count hidden>0</span></a>
+      <button class="nav-link nav-profile" type="button" data-profile-open>Профиль</button>
+      <button class="nav-link nav-install" type="button" data-install-button hidden>Установить</button>
     </nav>
   </header>
 
@@ -118,6 +125,7 @@
     <p>Информация о кино предоставляется через ПоискКино API.</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=13"></script>
+  <script type="module" src="js/common.js?v=14"></script>
+  <script type="module" src="js/app.js?v=14"></script>
 </body>
 </html>

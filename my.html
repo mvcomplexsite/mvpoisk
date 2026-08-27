@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#07070b" />
+  <meta name="description" content="Сохранённые фильмы и сериалы MVPoisk." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <title>Моё — MVPoisk</title>
+  <link rel="stylesheet" href="styles.css?v=14" />
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="MVPoisk — на главную"><span class="brand-mark">MV</span><span>Poisk</span></a>
+    <nav class="nav">
+      <a href="./">Каталог</a>
+      <button class="nav-link nav-profile" type="button" data-profile-open>Профиль</button>
+      <button class="nav-link nav-install" type="button" data-install-button hidden>Установить</button>
+    </nav>
+  </header>
+  <main class="library-page">
+    <section class="library-hero">
+      <span class="eyebrow">Личная коллекция</span>
+      <div class="library-title-row"><div><h1>Моё</h1><p id="librarySubtitle">Сохраняй фильмы и сериалы, чтобы не потерять.</p></div><button class="profile-pill" type="button" data-profile-open><span class="profile-avatar" id="profileAvatar">MV</span><span id="profileLabel">Локальный профиль</span></button></div>
+      <div class="library-tabs" role="tablist">
+        <button class="library-tab active" type="button" role="tab" aria-selected="true" data-library-tab="watchLater">Посмотрю позже <span id="laterCount">0</span></button>
+        <button class="library-tab" type="button" role="tab" aria-selected="false" data-library-tab="favorites">Избранное <span id="favoriteCount">0</span></button>
+      </div>
+    </section>
+    <section class="catalog library-content">
+      <div class="movie-grid saved-grid" id="savedGrid"></div>
+      <div class="library-empty" id="libraryEmpty" hidden><div class="empty-icon">☆</div><h2>Здесь пока пусто</h2><p>Открой фильм и добавь его в список — он появится здесь.</p><a class="primary-action" href="./">Перейти в каталог</a></div>
+    </section>
+  </main>
+  <footer><a class="brand brand-small" href="./"><span class="brand-mark">MV</span><span>Poisk</span></a><p>Списки хранятся локально в этом браузере.</p></footer>
+  <script type="module" src="js/common.js?v=14"></script>
+  <script type="module" src="js/my.js?v=14"></script>
+</body>
+</html>
