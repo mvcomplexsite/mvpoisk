@@ -30,3 +30,11 @@ Settings → Pages → Deploy from a branch → main → /(root)
 ## v6 player change
 
 The embedded player no longer relies on the uploaded Kinobox bootstrap script to decide whether a backend succeeded. MVPoisk queries `/api/players?kinopoisk=<id>` itself, validates real `iframeUrl` values, renders its own source selector, and only then creates the iframe. Endpoints are tried in order: partner backend, then the documented Kinobox endpoint `https://kinobox.tv/api/players`.
+
+
+## v7 player fallback
+- Direct and AllOrigins-proxied player-discovery requests run in parallel.
+- Only the small JSON list of iframe URLs is proxied; video traffic is not proxied.
+- Search falls back from KinoPoisk ID to IMDb, TMDB and title when available.
+- All HTML and ES-module URLs are cache-busted with v=7 to avoid stale browser copies.
+- Each discovery request has a hard timeout.

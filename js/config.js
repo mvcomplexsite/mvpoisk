@@ -12,7 +12,13 @@ export const CONFIG = Object.freeze({
     { name: 'Партнёрский', url: 'https://fbhdplay.top/api/players' },
     { name: 'Kinobox', url: 'https://kinobox.tv/api/players' },
   ],
-  PLAYER_API_TIMEOUT_MS: 8000,
+  PLAYER_API_TIMEOUT_MS: 6500,
+
+  // Development/test CORS fallback. Only the small JSON response from the
+  // player-discovery API goes through this proxy; video/iframe traffic does not.
+  PLAYER_CORS_PROXIES: [
+    { name: 'AllOrigins', build: target => `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}` },
+  ],
 
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,

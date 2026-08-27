@@ -1,6 +1,6 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js';
-import { CONFIG, getWatchUrl } from './config.js';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=7';
+import { CONFIG, getWatchUrl } from './config.js?v=7';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=7';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -68,28 +68,69 @@ function normalizePlayerPayload(payload) {
     .filter(item => item.iframeUrl);
 }
 
-async function fetchPlayerSources(api, kpId) {
+function playerSearchCandidates(movie) {
+  const candidates = [];
+  const push = (key, value, label) => {
+    const v = String(value ?? '').trim();
+    if (!v) return;
+    if (candidates.some(item => item.key === key && item.value === v)) return;
+    candidates.push({ key, value: v, label });
+  };
+
+  push('kinopoisk', movie.id, `KinoPoisk ID ${movie.id}`);
+  push('imdb', movie.externalId?.imdb, `IMDb ${movie.externalId?.imdb || ''}`);
+  push('tmdb', movie.externalId?.tmdb, `TMDB ${movie.externalId?.tmdb || ''}`);
+  push('title', movie.name || movie.alternativeName, `название «${movie.name || movie.alternativeName || ''}»`);
+  return candidates;
+}
+
+function buildPlayerApiUrl(api, candidate) {
+  const url = new URL(api.url);
+  url.searchParams.set(candidate.key, candidate.value);
+  return url.toString();
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = CONFIG.PLAYER_API_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CONFIG.PLAYER_API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const url = new URL(api.url);
-    url.searchParams.set('kinopoisk', String(kpId));
     const response = await fetch(url, {
       method: 'GET',
       mode: 'cors',
       credentials: 'omit',
       cache: 'no-store',
-      referrerPolicy: 'no-referrer',
       signal: controller.signal,
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    const sources = normalizePlayerPayload(payload);
-    if (!sources.length) throw new Error('источники не найдены');
-    return sources;
+    return await response.json();
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function fetchPlayerSources(api, candidate) {
+  const targetUrl = buildPlayerApiUrl(api, candidate);
+  const routes = [
+    { name: 'напрямую', url: targetUrl },
+    ...(CONFIG.PLAYER_CORS_PROXIES || []).map(proxy => ({
+      name: `через ${proxy.name}`,
+      url: proxy.build(targetUrl),
+    })),
+  ];
+
+  const attempts = routes.map(async route => {
+    const payload = await fetchJsonWithTimeout(route.url);
+    const sources = normalizePlayerPayload(payload);
+    if (!sources.length) throw new Error('источники не найдены');
+    return { sources, route: route.name };
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch (aggregate) {
+    const details = (aggregate?.errors || []).map(err => err?.name === 'AbortError' ? 'таймаут' : (err?.message || 'ошибка сети'));
+    throw new Error(details.join(' / ') || 'ошибка сети');
   }
 }
 
@@ -177,27 +218,35 @@ async function initEmbeddedPlayer(movie) {
 
   const errors = [];
   let selectedApi = null;
+  let selectedCandidate = null;
+  let selectedRoute = null;
   let sources = null;
+  const candidates = playerSearchCandidates(movie);
 
-  for (const api of CONFIG.PLAYER_APIS) {
-    setPlayerState('loading', `Проверяем источник: ${api.name}…`);
-    try {
-      const result = await fetchPlayerSources(api, movie.id);
-      if (result.length) {
-        selectedApi = api;
-        sources = result;
-        break;
+  outer:
+  for (const candidate of candidates) {
+    for (const api of CONFIG.PLAYER_APIS) {
+      setPlayerState('loading', `Ищем по ${candidate.label}: ${api.name}…`);
+      try {
+        const result = await fetchPlayerSources(api, candidate);
+        if (result.sources.length) {
+          selectedApi = api;
+          selectedCandidate = candidate;
+          selectedRoute = result.route;
+          sources = result.sources;
+          break outer;
+        }
+      } catch (error) {
+        const reason = error?.message || 'ошибка сети';
+        errors.push(`${api.name}/${candidate.key}: ${reason}`);
+        console.warn('MVPoisk player API failed:', api.url, candidate, error);
       }
-    } catch (error) {
-      const reason = error?.name === 'AbortError' ? 'таймаут' : (error?.message || 'ошибка сети');
-      errors.push(`${api.name}: ${reason}`);
-      console.warn('MVPoisk player API failed:', api.url, error);
     }
   }
 
   if (!sources?.length) {
-    setPlayerState('error', 'Не удалось получить список плееров. Возможно, домены источников блокируются AdGuard/DNS. Резервная ссылка на GGpoisk остаётся ниже.');
-    setPlayerSourceLabel(errors.join(' • '));
+    setPlayerState('error', 'Не удалось получить список плееров. Попробовали KinoPoisk ID и резервные идентификаторы. Ссылка на GGpoisk остаётся ниже.');
+    setPlayerSourceLabel(errors.slice(-4).join(' • '));
     button?.removeAttribute('aria-busy');
     button?.classList.remove('is-loading');
     playerInitStarted = false;
@@ -206,7 +255,7 @@ async function initEmbeddedPlayer(movie) {
 
   renderPlayerSources(sources);
   setPlayerState('ready', '');
-  setPlayerSourceLabel(`${selectedApi.name}: найдено источников ${sources.length} • защита от pop-up включена`);
+  setPlayerSourceLabel(`${selectedApi.name} • ${selectedCandidate.label} • ${selectedRoute}: найдено ${sources.length} • защита от pop-up включена`);
   button?.removeAttribute('aria-busy');
   button?.classList.remove('is-loading');
   if (button) button.textContent = '▶ Плеер открыт';
