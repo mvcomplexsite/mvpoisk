@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { getMovies, searchMovies } from './api.js';
+import { imageAttrs, bindImageFallbacks } from './images.js';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -30,20 +31,22 @@ function scoreClass(score) {
   return 'rating-low';
 }
 
-function poster(movie) {
-  return movie.poster?.previewUrl || movie.poster?.url || '';
+function posterUrls(movie) {
+  return [movie.poster?.url, movie.poster?.previewUrl].filter(Boolean);
 }
+
 
 function movieCard(movie) {
   const title = movie.name || movie.alternativeName || 'Без названия';
   const score = Number(movie.rating?.kp || 0);
   const genres = (movie.genres || []).slice(0, 2).map(g => g.name).join(' • ');
   const type = movie.isSeries || /series/i.test(movie.type || '') ? 'Сериал' : 'Фильм';
-  const image = poster(movie);
+  const artwork = imageAttrs(posterUrls(movie), { width: 520 });
   return `
     <a class="movie-card" href="movie.html?id=${encodeURIComponent(movie.id)}" aria-label="${escapeHtml(title)}">
       <div class="poster-wrap">
-        ${image ? `<img src="${escapeHtml(image)}" alt="Постер: ${escapeHtml(title)}" loading="lazy" referrerpolicy="no-referrer">` : `<div class="poster-fallback">MV</div>`}
+        <div class="poster-fallback">MV</div>
+        ${artwork ? `<img ${artwork} alt="Постер: ${escapeHtml(title)}" loading="lazy" decoding="async">` : ''}
         <span class="rating-pill ${scoreClass(score)}">${score ? score.toFixed(1) : '—'}</span>
         <span class="type-pill">${type}</span>
       </div>
@@ -119,6 +122,7 @@ function renderResults(data) {
   state.page = Number(data?.page || state.page || 1);
   resultCount.textContent = data?.total ? `${Number(data.total).toLocaleString('ru-RU')} найдено` : `${docs.length} на странице`;
   grid.innerHTML = docs.map(movieCard).join('');
+  bindImageFallbacks(grid);
   if (!docs.length) showNotice('Ничего не найдено. Попробуй изменить запрос или фильтры.');
 
   pagination.hidden = state.pages <= 1;
@@ -144,9 +148,11 @@ $('#searchInput').addEventListener('input', event => {
       if (!docs.length) { box.hidden = true; return; }
       box.innerHTML = docs.map(movie => `
         <a href="movie.html?id=${movie.id}" class="suggestion-row">
-          ${poster(movie) ? `<img src="${escapeHtml(poster(movie))}" alt="" referrerpolicy="no-referrer">` : '<span class="suggestion-fallback">MV</span>'}
+          <span class="suggestion-fallback">MV</span>
+          ${posterUrls(movie).length ? `<img ${imageAttrs(posterUrls(movie), { width: 120 })} alt="" loading="lazy" decoding="async">` : ''}
           <span><strong>${escapeHtml(movie.name || movie.alternativeName || 'Без названия')}</strong><small>${escapeHtml([movie.year, movie.rating?.kp ? `КП ${Number(movie.rating.kp).toFixed(1)}` : ''].filter(Boolean).join(' • '))}</small></span>
         </a>`).join('');
+      bindImageFallbacks(box);
       box.hidden = false;
     } catch {
       box.hidden = true;

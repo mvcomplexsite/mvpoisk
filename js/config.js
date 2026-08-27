@@ -5,6 +5,8 @@ export const CONFIG = Object.freeze({
   API_KEY: 'MD2PV7Q-WPYM4Y8-GKQER3G-10WHNCP',
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
+  PLAYER_SCRIPT_URL: 'https://phobplay.top/kinobox.js',
+  PLAYER_BASE_URL: 'https://fbhdplay.top/',
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,
 });
