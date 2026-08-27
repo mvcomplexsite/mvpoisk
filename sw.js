@@ -1,8 +1,8 @@
-const CACHE = 'mvpoisk-shell-v17';
+const CACHE = 'mvpoisk-shell-v18';
 const SHELL = [
-  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=17',
-  './js/config.js?v=17', './js/api.js?v=17', './js/images.js?v=17', './js/storage.js?v=17',
-  './js/common.js?v=17', './js/app.js?v=17', './js/movie.js?v=17', './js/my.js?v=17',
+  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=18',
+  './js/config.js?v=18', './js/api.js?v=18', './js/images.js?v=18', './js/storage.js?v=18',
+  './js/common.js?v=18', './js/app.js?v=18', './js/movie.js?v=18', './js/my.js?v=18',
   './manifest.webmanifest',
   './icons/favicon-16.png', './icons/favicon-32.png', './icons/logo-mark-64.png', './icons/logo-mark-128.png',
   './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'

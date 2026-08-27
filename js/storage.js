@@ -2,6 +2,7 @@ const KEYS = Object.freeze({
   profile: 'mvpoisk:profile:v1',
   watchLater: 'mvpoisk:watch-later:v1',
   favorites: 'mvpoisk:favorites:v1',
+  watchNoticeDismissed: 'mvpoisk:watch-notice-dismissed:v1',
 });
 
 function read(key, fallback) {
@@ -92,4 +93,19 @@ export function counts() {
     watchLater: getList('watchLater').length,
     favorites: getList('favorites').length,
   };
+}
+
+
+export function isWatchNoticeDismissed() {
+  try { return localStorage.getItem(KEYS.watchNoticeDismissed) === '1'; } catch { return false; }
+}
+
+export function dismissWatchNotice() {
+  try {
+    localStorage.setItem(KEYS.watchNoticeDismissed, '1');
+    window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key: KEYS.watchNoticeDismissed } }));
+    return true;
+  } catch {
+    return false;
+  }
 }

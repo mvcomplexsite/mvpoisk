@@ -1,12 +1,156 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=17';
-import { getWatchUrl } from './config.js?v=17';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=17';
-import { hasInList, toggleInList } from './storage.js?v=17';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=18';
+import { getWatchUrl } from './config.js?v=18';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=18';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=18';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
 const kpId = params.get('id');
 let currentMovie = null;
+
+let pendingWatchUrl = '';
+
+function deviceInfo() {
+  const ua = navigator.userAgent || '';
+  const isiOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+  if (isiOS) return { type: 'ios', label: 'iPhone / iPad' };
+  if (isAndroid) return { type: 'android', label: 'Android' };
+  return { type: 'desktop', label: 'Компьютер' };
+}
+
+function protectionMarkup() {
+  const device = deviceInfo();
+  if (device.type === 'android') {
+    return `
+      <div class="watch-protection-card">
+        <div class="watch-protection-icon">A</div>
+        <div class="watch-protection-copy">
+          <div class="watch-protection-title"><span>Для Android</span><em>Простой вариант</em></div>
+          <p>Включи частный DNS — он убирает часть рекламы без отдельного браузера.</p>
+          <div class="watch-protection-actions">
+            <button type="button" class="watch-help-button" data-copy-dns>Скопировать DNS</button>
+            <a class="watch-help-link" href="https://adguard-dns.io/ru/public-dns.html" target="_blank" rel="noopener noreferrer">Как включить ↗</a>
+          </div>
+          <code class="watch-dns-value">dns.adguard-dns.com</code>
+        </div>
+      </div>`;
+  }
+  if (device.type === 'ios') {
+    return `
+      <div class="watch-protection-card">
+        <div class="watch-protection-icon"></div>
+        <div class="watch-protection-copy">
+          <div class="watch-protection-title"><span>Для iPhone / iPad</span><em>Safari</em></div>
+          <p>Блокировщик для Safari — самый понятный способ уменьшить рекламу при просмотре.</p>
+          <div class="watch-protection-actions">
+            <a class="watch-help-button" href="https://adguard.com/ru/adguard-ios/overview.html" target="_blank" rel="noopener noreferrer">Открыть AdGuard ↗</a>
+          </div>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="watch-protection-card">
+      <div class="watch-protection-icon">✦</div>
+      <div class="watch-protection-copy">
+        <div class="watch-protection-title"><span>Для компьютера</span><em>Рекомендуем</em></div>
+        <p>Если блокировщик уже включён — просто продолжай. Если нет, можно поставить лёгкое расширение для браузера.</p>
+        <div class="watch-protection-actions">
+          <a class="watch-help-button" href="https://adguard.com/ru/adguard-browser-extension/overview.html" target="_blank" rel="noopener noreferrer">Открыть AdGuard ↗</a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function ensureWatchNotice() {
+  let modal = document.querySelector('#watchNotice');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'watchNotice';
+  modal.className = 'watch-warning-shell';
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="watch-warning-backdrop" data-watch-close></div>
+    <section class="watch-warning-card" role="dialog" aria-modal="true" aria-labelledby="watchWarningTitle">
+      <button class="watch-warning-close" type="button" data-watch-close aria-label="Закрыть">×</button>
+      <div class="watch-warning-brand"><img src="icons/logo-mark-64.png" width="32" height="32" alt=""><span>MVPoisk</span></div>
+      <span class="eyebrow">Перед просмотром</span>
+      <h2 id="watchWarningTitle">На сайте партнёра может быть реклама</h2>
+      <p class="watch-warning-copy">MVPoisk её не размещает. Если хочешь смотреть спокойнее, ниже есть простой вариант защиты для твоего устройства.</p>
+      ${protectionMarkup()}
+      <div class="watch-warning-note"><span>✓</span><p>Защита необязательна. Если у тебя уже есть AdGuard или другой блокировщик — ничего настраивать не нужно.</p></div>
+      <div class="watch-warning-actions">
+        <button class="watch-warning-primary" type="button" data-watch-continue><span>▶</span> Смотреть</button>
+        <button class="watch-warning-never" type="button" data-watch-never>Больше не показывать и продолжить</button>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+
+  const close = () => {
+    modal.hidden = true;
+    document.body.classList.remove('watch-warning-open');
+    pendingWatchUrl = '';
+  };
+  modal.querySelectorAll('[data-watch-close]').forEach(node => node.addEventListener('click', close));
+  modal.querySelector('[data-watch-continue]').addEventListener('click', () => openPartnerWatch(false));
+  modal.querySelector('[data-watch-never]').addEventListener('click', () => openPartnerWatch(true));
+  modal.querySelector('[data-copy-dns]')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const value = 'dns.adguard-dns.com';
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(value);
+      copied = true;
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = value;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { copied = document.execCommand('copy'); } catch {}
+      area.remove();
+    }
+    if (copied) {
+      const old = button.textContent;
+      button.textContent = 'Скопировано ✓';
+      button.classList.add('is-copied');
+      setTimeout(() => { button.textContent = old; button.classList.remove('is-copied'); }, 1800);
+    }
+  });
+  return modal;
+}
+
+function openPartnerWatch(dismiss = false) {
+  const url = pendingWatchUrl;
+  if (!url) return;
+  if (dismiss) dismissWatchNotice();
+  const modal = document.querySelector('#watchNotice');
+  if (modal) modal.hidden = true;
+  document.body.classList.remove('watch-warning-open');
+  pendingWatchUrl = '';
+  const opened = window.open(url, '_blank');
+  if (opened) opened.opener = null;
+  else window.location.href = url;
+}
+
+function openWatchNotice(url) {
+  pendingWatchUrl = url;
+  const modal = ensureWatchNotice();
+  modal.hidden = false;
+  document.body.classList.add('watch-warning-open');
+  requestAnimationFrame(() => modal.querySelector('[data-watch-continue]')?.focus());
+}
+
+function bindWatchAction() {
+  const button = document.querySelector('[data-watch-action]');
+  if (!button) return;
+  button.addEventListener('click', event => {
+    if (isWatchNoticeDismissed()) return;
+    event.preventDefault();
+    openWatchNotice(button.href);
+  });
+}
 
 function esc(value = '') {
   return String(value).replace(/[&<>'"]/g, ch => ({
@@ -115,7 +259,7 @@ function renderMovie(movie) {
           </div>
           <p class="movie-description">${esc(description)}</p>
           <div class="movie-actions movie-actions-primary">
-            <a class="watch-button" href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer"><span class="watch-play">▶</span><span>Смотреть</span></a>
+            <a class="watch-button" data-watch-action href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer"><span class="watch-play">▶</span><span>Смотреть</span></a>
             <button class="secondary-button list-action" type="button" data-list-action="watchLater" aria-pressed="false"></button>
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
             <a class="secondary-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer">Кинопоиск ↗</a>
@@ -138,6 +282,7 @@ function renderMovie(movie) {
     </div>`;
   bindImageFallbacks(root);
   bindMovieActions();
+  bindWatchAction();
   updateListButtons();
 }
 
@@ -191,3 +336,14 @@ async function init() {
   }
 }
 init();
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    const modal = document.querySelector('#watchNotice');
+    if (modal && !modal.hidden) {
+      modal.hidden = true;
+      document.body.classList.remove('watch-warning-open');
+      pendingWatchUrl = '';
+    }
+  }
+});
