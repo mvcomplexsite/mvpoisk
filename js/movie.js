@@ -1,6 +1,6 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=10';
-import { CONFIG, getWatchUrl } from './config.js?v=10';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=10';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=11';
+import { CONFIG, getWatchUrl } from './config.js?v=11';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=11';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -67,40 +67,92 @@ function normalizePlayers(payload) {
   }).filter(item => item.success && /^https?:\/\//i.test(item.iframeUrl));
 }
 
-function playerProxyUrl(movie) {
+function playerProxyUrl(movie, source, searchMode = 'kinopoisk') {
   const configured = String(CONFIG.PLAYER_PROXY_URL || '').trim();
   if (!configured) return null;
   const url = new URL(configured, location.href);
-  url.searchParams.set('kinopoisk', String(movie.id));
-  if (movie.externalId?.imdb) url.searchParams.set('imdb', String(movie.externalId.imdb));
-  if (movie.externalId?.tmdb) url.searchParams.set('tmdb', String(movie.externalId.tmdb));
-  if (movie.name || movie.alternativeName) url.searchParams.set('title', String(movie.name || movie.alternativeName));
+  url.searchParams.set('source', source);
+
+  if (searchMode === 'kinopoisk' && movie.id) {
+    url.searchParams.set('kinopoisk', String(movie.id));
+  } else if (searchMode === 'imdb' && movie.externalId?.imdb) {
+    url.searchParams.set('imdb', String(movie.externalId.imdb));
+  } else if (searchMode === 'tmdb' && movie.externalId?.tmdb) {
+    url.searchParams.set('tmdb', String(movie.externalId.tmdb));
+  } else if (searchMode === 'title' && (movie.name || movie.alternativeName)) {
+    url.searchParams.set('title', String(movie.name || movie.alternativeName));
+  } else {
+    return null;
+  }
   return url;
 }
 
-async function fetchPlayersViaProxy(movie) {
-  const url = playerProxyUrl(movie);
-  if (!url) return [];
+function proxyErrorDetails(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const parts = [];
+  if (payload.upstream) parts.push(payload.upstream);
+  if (payload.status) parts.push(`HTTP ${payload.status}`);
+  if (payload.message) parts.push(payload.message);
+  if (payload.bodyPreview) parts.push(payload.bodyPreview.slice(0, 240));
+  return parts.join(' • ');
+}
 
-  const request = withTimeout(signal => fetch(url, {
-    signal,
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  }), 14000);
-  const response = await request.done;
-  let payload = null;
-  try { payload = await response.json(); } catch (_) {}
-  if (!response.ok) {
-    const details = Array.isArray(payload?.details) ? `: ${payload.details.join(' • ')}` : '';
-    throw new Error(`Player proxy HTTP ${response.status}${details}`);
+async function fetchPlayersAttempt(movie, source, searchMode) {
+  const url = playerProxyUrl(movie, source, searchMode);
+  if (!url) return { players: [], error: `${source}/${searchMode}: нет идентификатора` };
+
+  try {
+    const request = withTimeout(signal => fetch(url, {
+      signal,
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    }), 18000);
+    const response = await request.done;
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      return { players: [], error: `${source}/${searchMode}: ответ не является JSON (${error?.message || 'parse error'})` };
+    }
+
+    if (!response.ok) {
+      const details = proxyErrorDetails(payload);
+      return { players: [], error: `${source}/${searchMode}: ${details || `proxy HTTP ${response.status}`}` };
+    }
+
+    const players = normalizePlayers(payload);
+    if (!players.length) {
+      return { players: [], error: `${source}/${searchMode}: источники не найдены` };
+    }
+
+    return { players, upstream: response.headers.get('X-MVPoisk-Upstream') || source, searchMode };
+  } catch (error) {
+    return { players: [], error: `${source}/${searchMode}: ${error?.name === 'AbortError' ? 'таймаут' : (error?.message || 'ошибка сети')}` };
   }
-  const players = normalizePlayers(payload);
-  if (!players.length) {
-    const details = Array.isArray(payload?.details) ? `: ${payload.details.join(' • ')}` : '';
-    throw new Error(`Player proxy returned no playable sources${details}`);
+}
+
+async function fetchPlayersViaProxy(movie) {
+  const searchModes = ['kinopoisk'];
+  if (movie.externalId?.imdb) searchModes.push('imdb');
+  if (movie.externalId?.tmdb) searchModes.push('tmdb');
+  if (movie.name || movie.alternativeName) searchModes.push('title');
+
+  // Partner first because that is the integration already used by GGpoisk.
+  // Kinobox is the fallback. Each successful response is streamed by the Worker,
+  // so the Worker never buffers/parses the potentially large JSON body.
+  const errors = [];
+  for (const source of ['partner', 'kinobox']) {
+    for (const mode of searchModes) {
+      const result = await fetchPlayersAttempt(movie, source, mode);
+      if (result.players?.length) {
+        setPlayerSourceLabel(`MVPoisk proxy v11 • ${result.upstream}/${result.searchMode} • найдено источников: ${result.players.length}`);
+        return result.players;
+      }
+      if (result.error) errors.push(result.error);
+    }
   }
-  setPlayerSourceLabel(`MVPoisk proxy • upstream: ${payload?.upstream || 'unknown'} • найдено источников: ${players.length}`);
-  return players;
+
+  throw new Error(errors.join(' | '));
 }
 
 function makePlayerFrame(url) {
