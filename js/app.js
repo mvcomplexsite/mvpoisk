@@ -1,6 +1,6 @@
-import { CONFIG } from './config.js?v=15';
-import { getMovies, searchMovies } from './api.js?v=15';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=15';
+import { CONFIG } from './config.js?v=16';
+import { getMovies, searchMovies } from './api.js?v=16';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=16';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -75,7 +75,7 @@ function showNotice(text, kind = '') {
 
 function friendlyError(error) {
   if (error?.status === 401) return 'API отклонил токен. Проверь ключ ПоискКино.';
-  if (error?.status === 403) return 'Доступ к этому запросу ограничен тарифом API.';
+  if (error?.status === 403) return 'API ограничил этот запрос. MVPoisk использует расширенную локальную пагинацию в пределах доступных страниц.';
   if (error?.status === 429) return 'Лимит запросов API на сегодня исчерпан. Попробуй позже.';
   return 'Не удалось получить данные. Проверь соединение и доступность API.';
 }
@@ -121,7 +121,7 @@ function renderResults(data) {
   const docs = Array.isArray(data?.docs) ? data.docs : [];
   state.pages = Math.max(1, Number(data?.pages || 1));
   state.page = Number(data?.page || state.page || 1);
-  resultCount.textContent = data?.total ? `${Number(data.total).toLocaleString('ru-RU')} найдено` : `${docs.length} на странице`;
+  resultCount.textContent = data?.total ? `${Number(data.total).toLocaleString('ru-RU')} найдено${data.apiLimited ? ` • доступно ${data.pages} стр.` : ''}` : `${docs.length} на странице`;
   grid.innerHTML = docs.map(movieCard).join('');
   bindImageFallbacks(grid);
   if (!docs.length) showNotice('Ничего не найдено. Попробуй изменить запрос или фильтры.');

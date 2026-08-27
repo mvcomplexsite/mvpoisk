@@ -6,6 +6,10 @@ export const CONFIG = Object.freeze({
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
   PAGE_SIZE: 20,
+  // Demo/free API allows only the first 10 API pages. We request a larger
+  // batch and split it into normal 20-item MVPoisk pages client-side.
+  API_BATCH_SIZE: 240,
+  API_FREE_PAGE_LIMIT: 10,
   CACHE_TTL_MS: 10 * 60 * 1000,
 });
 

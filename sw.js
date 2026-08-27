@@ -1,8 +1,8 @@
-const CACHE = 'mvpoisk-shell-v15';
+const CACHE = 'mvpoisk-shell-v16';
 const SHELL = [
-  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=15',
-  './js/config.js?v=15', './js/api.js?v=15', './js/images.js?v=15', './js/storage.js?v=15',
-  './js/common.js?v=15', './js/app.js?v=15', './js/movie.js?v=15', './js/my.js?v=15',
+  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=16',
+  './js/config.js?v=16', './js/api.js?v=16', './js/images.js?v=16', './js/storage.js?v=16',
+  './js/common.js?v=16', './js/app.js?v=16', './js/movie.js?v=16', './js/my.js?v=16',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];
 self.addEventListener('install', event => {

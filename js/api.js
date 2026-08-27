@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js?v=15';
+import { CONFIG } from './config.js?v=16';
 
 const memoryCache = new Map();
 
@@ -23,16 +23,17 @@ function getCached(url) {
   }
 }
 
-function setCached(url, data) {
+function setCached(url, data, persist = true) {
   memoryCache.set(url, data);
+  if (!persist) return;
   try {
     sessionStorage.setItem(cacheKey(url), JSON.stringify({ time: Date.now(), data }));
   } catch {
-    // Storage may be disabled; in-memory cache is enough.
+    // Large catalog batches can exceed browser storage quota. In-memory cache is enough.
   }
 }
 
-async function apiFetch(path, params = {}, { cache = true } = {}) {
+async function apiFetch(path, params = {}, { cache = true, persistCache = true } = {}) {
   const url = new URL(`${CONFIG.API_BASE}${path}`);
   Object.entries(params).forEach(([key, value]) => {
     if (value === '' || value === null || value === undefined) return;
@@ -62,11 +63,52 @@ async function apiFetch(path, params = {}, { cache = true } = {}) {
   }
 
   const data = await response.json();
-  if (cache) setCached(urlString, data);
+  if (cache) setCached(urlString, data, persistCache);
   return data;
 }
 
-export function searchMovies(query, page = 1, limit = 12) {
+function virtualPageInfo(uiPage, uiPageSize = CONFIG.PAGE_SIZE) {
+  const batchSize = CONFIG.API_BATCH_SIZE;
+  const pagesPerApiPage = Math.max(1, Math.floor(batchSize / uiPageSize));
+  const maxUiPages = CONFIG.API_FREE_PAGE_LIMIT * pagesPerApiPage;
+  const safeUiPage = Math.max(1, Math.min(maxUiPages, Number(uiPage) || 1));
+  const apiPage = Math.floor((safeUiPage - 1) / pagesPerApiPage) + 1;
+  const offset = ((safeUiPage - 1) % pagesPerApiPage) * uiPageSize;
+  return { safeUiPage, apiPage, offset, batchSize, maxUiPages };
+}
+
+function virtualizeResponse(data, uiPage, uiPageSize, info) {
+  const docs = Array.isArray(data?.docs) ? data.docs : [];
+  const total = Number(data?.total || docs.length || 0);
+  const realUiPages = Math.max(1, Math.ceil(total / uiPageSize));
+  const accessiblePages = Math.min(realUiPages, info.maxUiPages);
+
+  return {
+    ...data,
+    docs: docs.slice(info.offset, info.offset + uiPageSize),
+    page: Math.min(uiPage, accessiblePages),
+    pages: accessiblePages,
+    total,
+    apiLimited: realUiPages > accessiblePages,
+    realPages: realUiPages,
+  };
+}
+
+async function fetchVirtual(path, baseParams, uiPage, uiPageSize = CONFIG.PAGE_SIZE) {
+  const info = virtualPageInfo(uiPage, uiPageSize);
+  const data = await apiFetch(path, {
+    ...baseParams,
+    page: info.apiPage,
+    limit: info.batchSize,
+  }, { persistCache: false });
+  return virtualizeResponse(data, info.safeUiPage, uiPageSize, info);
+}
+
+// Main search results use virtual pagination. Small calls (autocomplete) stay lightweight.
+export function searchMovies(query, page = 1, limit = CONFIG.PAGE_SIZE) {
+  if (limit === CONFIG.PAGE_SIZE) {
+    return fetchVirtual('/movie/search', { query }, page, limit);
+  }
   return apiFetch('/movie/search', { query, page, limit });
 }
 
@@ -78,10 +120,8 @@ export function getReviews(movieId, limit = 6) {
   return apiFetch('/review', { movieId, page: 1, limit });
 }
 
-export function getMovies(filters = {}) {
-  const params = {
-    page: filters.page || 1,
-    limit: filters.limit || CONFIG.PAGE_SIZE,
+function movieFilterParams(filters = {}) {
+  return {
     'rating.kp': filters.rating ? `${filters.rating}-10` : '6-10',
     'votes.kp': filters.topMode ? '100000-999999999' : '10000-999999999',
     'genres.name': filters.genre || undefined,
@@ -91,7 +131,22 @@ export function getMovies(filters = {}) {
     sortField: filters.topMode ? 'rating.kp' : 'votes.kp',
     sortType: '-1',
   };
-  return apiFetch('/movie', params);
+}
+
+export function getMovies(filters = {}) {
+  const params = movieFilterParams(filters);
+
+  // The catalog has no custom limit: use one large legal API page and split it locally.
+  if (!filters.limit) {
+    return fetchVirtual('/movie', params, filters.page || 1, CONFIG.PAGE_SIZE);
+  }
+
+  // Small internal selections such as "similar movies" remain normal lightweight calls.
+  return apiFetch('/movie', {
+    ...params,
+    page: filters.page || 1,
+    limit: filters.limit,
+  });
 }
 
 export function getSimilarMovies(movie) {
