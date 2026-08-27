@@ -8,9 +8,7 @@ export const CONFIG = Object.freeze({
 
   // Optional server-side proxy for player discovery.
   // After deploying worker/worker.js, paste its /players URL here.
-  PLAYER_PROXY_URL: '',
-  KINOBOX_EMBED_BASE: 'https://kinobox.tv/embed/#',
-
+  PLAYER_PROXY_URL: 'https://mvpoisk.cizikvpn.workers.dev/players',
 
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,

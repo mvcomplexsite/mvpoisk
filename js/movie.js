@@ -1,6 +1,6 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=9';
-import { CONFIG, getWatchUrl } from './config.js?v=9';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=9';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=10';
+import { CONFIG, getWatchUrl } from './config.js?v=10';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=10';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -88,10 +88,18 @@ async function fetchPlayersViaProxy(movie) {
     cache: 'no-store',
   }), 14000);
   const response = await request.done;
-  if (!response.ok) throw new Error(`Player proxy HTTP ${response.status}`);
-  const payload = await response.json();
+  let payload = null;
+  try { payload = await response.json(); } catch (_) {}
+  if (!response.ok) {
+    const details = Array.isArray(payload?.details) ? `: ${payload.details.join(' • ')}` : '';
+    throw new Error(`Player proxy HTTP ${response.status}${details}`);
+  }
   const players = normalizePlayers(payload);
-  if (!players.length) throw new Error('Player proxy returned no playable sources');
+  if (!players.length) {
+    const details = Array.isArray(payload?.details) ? `: ${payload.details.join(' • ')}` : '';
+    throw new Error(`Player proxy returned no playable sources${details}`);
+  }
+  setPlayerSourceLabel(`MVPoisk proxy • upstream: ${payload?.upstream || 'unknown'} • найдено источников: ${players.length}`);
   return players;
 }
 
@@ -155,16 +163,6 @@ function renderPlayerMenu(players) {
   });
 }
 
-function renderDirectKinoboxEmbed(movie, reason = '') {
-  const toolbar = document.querySelector('#playerToolbar');
-  if (toolbar) { toolbar.hidden = true; toolbar.innerHTML = ''; }
-  const embedUrl = `${CONFIG.KINOBOX_EMBED_BASE}${encodeURIComponent(String(movie.id))}`;
-  setPlayerSourceLabel(reason
-    ? `${reason} • пробуем прямой Kinobox embed без внешнего JS`
-    : 'Прямой Kinobox embed без внешнего JS');
-  renderPlayerFrame(embedUrl, 'Kinobox embed');
-}
-
 function togglePlayerProtection() {
   playerProtectionEnabled = !playerProtectionEnabled;
   const button = document.querySelector('#compatibilityButton');
@@ -192,19 +190,15 @@ async function initEmbeddedPlayer(movie) {
   if (button) button.textContent = '▶ Открываем плеер…';
 
   try {
-    if (String(CONFIG.PLAYER_PROXY_URL || '').trim()) {
-      setPlayerState('loading', 'Получаем список источников через MVPoisk proxy…');
-      availablePlayers = await fetchPlayersViaProxy(movie);
-      renderPlayerMenu(availablePlayers);
-      renderPlayerFrame(availablePlayers[0].iframeUrl, availablePlayers[0].source);
-    } else {
-      // This route avoids kinobox.min.js completely. It may still be blocked by DNS/AdGuard,
-      // but gives GitHub Pages a zero-CORS fallback while the Worker URL is not configured.
-      renderDirectKinoboxEmbed(movie, 'Proxy пока не настроен');
-    }
+    if (!String(CONFIG.PLAYER_PROXY_URL || '').trim()) throw new Error('PLAYER_PROXY_URL не настроен');
+    setPlayerState('loading', 'Получаем список источников через MVPoisk proxy…');
+    availablePlayers = await fetchPlayersViaProxy(movie);
+    renderPlayerMenu(availablePlayers);
+    renderPlayerFrame(availablePlayers[0].iframeUrl, availablePlayers[0].source);
   } catch (error) {
     console.warn('MVPoisk player proxy failed:', error);
-    renderDirectKinoboxEmbed(movie, `Proxy недоступен: ${error?.message || 'ошибка'}`);
+    setPlayerState('error', 'Не удалось получить рабочий плеер через MVPoisk proxy. Резервная ссылка на GGpoisk остаётся ниже.');
+    setPlayerSourceLabel(`Proxy: ${error?.message || 'неизвестная ошибка'}`);
   } finally {
     button?.removeAttribute('aria-busy');
     button?.classList.remove('is-loading');
