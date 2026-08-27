@@ -74,3 +74,18 @@ img[hidden]{display:none!important}
 #kinoboxPlayer.kinobox_player iframe{max-width:100%;border:0}
 .player-shell[data-state="ready"] #kinoboxPlayer{opacity:1}
 .player-shell[data-state="loading"] #kinoboxPlayer{opacity:.92}
+
+
+/* MVPoisk v9: search suggestions are in document flow — no overlap with filters/cards. */
+.search-area{position:relative;max-width:780px;margin:0 auto;text-align:left}
+.search-area>.search-shell{max-width:none;margin:0}
+.search-area>.suggestions{position:relative;left:auto;right:auto;top:auto;margin-top:10px;max-height:min(360px,52vh);overflow:auto;z-index:1;overscroll-behavior:contain}
+.search-area>.suggestions[hidden]{display:none}
+@media(max-width:700px){.search-area>.suggestions{max-height:min(330px,48vh)}}
+
+/* MVPoisk v9 player stack */
+.mv-player-stack{position:relative;z-index:2;width:100%;height:100%;display:flex;flex-direction:column;background:#0b0a10}
+.mv-player-stack .mv-player-frame-host{flex:1 1 auto;min-height:0;aspect-ratio:auto}
+.mv-player-stack .mv-player-toolbar{flex:0 0 auto}
+.player-shell[data-state="error"] .mv-player-stack{opacity:.35}
+.player-shell[data-state="ready"] .mv-player-stack{opacity:1}

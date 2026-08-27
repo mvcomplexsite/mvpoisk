@@ -1,47 +1,27 @@
-# MVPoisk v5
+# MVPoisk v9
 
-Статический кино-каталог для GitHub Pages.
+Статический фронтенд для GitHub Pages.
 
-## Что есть
+## Что исправлено
 
-- каталог, поиск и фильтры через ПоискКино API;
-- отдельные страницы фильмов/сериалов с оригинальным KinoPoisk ID;
-- постеры с fallback-цепочкой;
-- отзывы, актёры, похожие фильмы;
-- встроенный просмотр по KinoPoisk ID;
-- локальная копия `js/kinobox.js`, поэтому блокировщик не может отрезать сам bootstrap-скрипт по стороннему домену;
-- автоматический fallback плеера: сначала партнёрский endpoint `https://fbhdplay.top/api/players`, затем документированный Kinobox `https://kinobox.tv/api/players`;
-- верхний iframe плеера запускается в защищённом sandbox без `allow-popups` и без разрешения top-navigation;
-- если конкретный видеобалансер не работает в sandbox, есть ручная кнопка «Режим совместимости»;
-- резервная ссылка на GGpoisk остаётся доступной.
+- Подсказки поиска больше не наслаиваются на фильтры и карточки: список находится в нормальном потоке страницы.
+- Удалена зависимость от загрузки `kinobox.min.js` в основном сценарии.
+- Пока proxy не настроен, «Смотреть» пробует прямой `https://kinobox.tv/embed/#KINOPOISK_ID`.
+- Для стабильного получения списка плееров добавлен `worker/worker.js`. Worker делает server-side запрос, поэтому браузерный CORS GitHub Pages больше не мешает.
+- Источники выводятся кнопками над плеером; можно переключать балансер.
+- Защита iframe от pop-up включается отдельной кнопкой, чтобы не ломать несовместимые плееры.
 
-## Просмотр
+## Подключение Worker
 
-Локальный `kinobox.js` выполняет запрос к `${baseUrl}/api/players?kinopoisk=ID`, получает доступные `iframeUrl` и выводит выбранный плеер.
+1. Создать бесплатный Cloudflare Worker.
+2. Вставить содержимое `worker/worker.js` и Deploy.
+3. Получится адрес вида `https://mvpoisk-player-proxy.<account>.workers.dev`.
+4. В `js/config.js` указать:
 
-Защищённый режим не гарантирует отсутствие встроенной рекламы внутри самого видеобалансера. Он блокирует pop-up / попытки верхнеуровневой навигации из верхнего iframe, а сетевую рекламу дополнительно может фильтровать AdGuard.
+```js
+PLAYER_PROXY_URL: 'https://mvpoisk-player-proxy.<account>.workers.dev/players',
+```
 
-## GitHub Pages
+5. Залить изменения в GitHub Pages и сделать Ctrl+F5.
 
-Загрузите содержимое папки в корень репозитория и включите:
-
-Settings → Pages → Deploy from a branch → main → /(root)
-
-## v6 player change
-
-The embedded player no longer relies on the uploaded Kinobox bootstrap script to decide whether a backend succeeded. MVPoisk queries `/api/players?kinopoisk=<id>` itself, validates real `iframeUrl` values, renders its own source selector, and only then creates the iframe. Endpoints are tried in order: partner backend, then the documented Kinobox endpoint `https://kinobox.tv/api/players`.
-
-
-## v7 player fallback
-- Direct and AllOrigins-proxied player-discovery requests run in parallel.
-- Only the small JSON list of iframe URLs is proxied; video traffic is not proxied.
-- Search falls back from KinoPoisk ID to IMDb, TMDB and title when available.
-- All HTML and ES-module URLs are cache-busted with v=7 to avoid stale browser copies.
-- Each discovery request has a hard timeout.
-
-
-## v8 — официальный Kinobox
-
-Встроенный просмотр теперь запускается через официальный `https://kinobox.tv/kinobox.min.js`, как рекомендует документация Kinobox. MVPoisk больше не делает браузерные `fetch()` к `/api/players` и не зависит от публичного CORS proxy. Поиск передаёт KinoPoisk ID, IMDb, TMDB и название как резервные идентификаторы.
-
-По умолчанию плеер работает в режиме совместимости, чтобы не ломать балансеры. После успешной загрузки можно включить дополнительную защиту от pop-up; AdGuard при этом можно оставить включённым.
+Само видео Worker не проксирует — только маленький JSON со списком iframe-источников.

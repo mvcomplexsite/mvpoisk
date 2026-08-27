@@ -7,7 +7,7 @@
   <meta name="description" content="MVPoisk — поиск фильмов и сериалов, рейтинги, отзывы и информация о кино." />
   <title>MVPoisk — фильмы и сериалы</title>
   <link rel="preconnect" href="https://api.poiskkino.dev" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -30,12 +30,14 @@
       <h1>Найди, что посмотреть <span>сегодня</span></h1>
       <p>Ищи кино по названию или отфильтруй каталог по жанру, году и рейтингу.</p>
 
-      <form class="search-shell" id="searchForm" autocomplete="off">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65A8 8 0 1 1 3 11a8 8 0 0 1 16 0Z"/></svg>
-        <input id="searchInput" type="search" placeholder="Название фильма или сериала" aria-label="Поиск фильма" />
-        <button type="submit">Найти</button>
+      <div class="search-area">
+        <form class="search-shell" id="searchForm" autocomplete="off">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65A8 8 0 1 1 3 11a8 8 0 0 1 16 0Z"/></svg>
+          <input id="searchInput" type="search" placeholder="Название фильма или сериала" aria-label="Поиск фильма" />
+          <button type="submit">Найти</button>
+        </form>
         <div class="suggestions" id="suggestions" hidden></div>
-      </form>
+      </div>
 
       <div class="hero-chips" aria-label="Быстрые запросы">
         <button type="button" data-search="Интерстеллар">Интерстеллар</button>
@@ -116,6 +118,6 @@
     <p>Информация о кино предоставляется через ПоискКино API.</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=8"></script>
+  <script type="module" src="js/app.js?v=9"></script>
 </body>
 </html>

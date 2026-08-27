@@ -6,6 +6,11 @@ export const CONFIG = Object.freeze({
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
 
+  // Optional server-side proxy for player discovery.
+  // After deploying worker/worker.js, paste its /players URL here.
+  PLAYER_PROXY_URL: '',
+  KINOBOX_EMBED_BASE: 'https://kinobox.tv/embed/#',
+
 
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,

@@ -1,6 +1,6 @@
-import { CONFIG } from './config.js?v=8';
-import { getMovies, searchMovies } from './api.js?v=8';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=8';
+import { CONFIG } from './config.js?v=9';
+import { getMovies, searchMovies } from './api.js?v=9';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=9';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -161,7 +161,7 @@ $('#searchInput').addEventListener('input', event => {
 });
 
 document.addEventListener('click', event => {
-  if (!event.target.closest('.search-shell')) $('#suggestions').hidden = true;
+  if (!event.target.closest('.search-area')) $('#suggestions').hidden = true;
 });
 
 $('#searchForm').addEventListener('submit', event => {
