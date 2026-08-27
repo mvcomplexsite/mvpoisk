@@ -22,6 +22,8 @@ function firstText(...values) { return values.find(v => typeof v === 'string' &&
 
 let playerScriptPromise = null;
 let playerInitStarted = false;
+let activePlayerInstance = null;
+let playerProtectedMode = true;
 
 function loadClassicScript(src) {
   if (playerScriptPromise) return playerScriptPromise;
@@ -31,7 +33,7 @@ function loadClassicScript(src) {
     if (existing) {
       if (typeof window.kinobox === 'function') return resolve();
       existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('Не удалось загрузить скрипт плеера.')), { once: true });
+      existing.addEventListener('error', () => reject(new Error('Не удалось загрузить локальный скрипт плеера.')), { once: true });
       return;
     }
 
@@ -43,7 +45,7 @@ function loadClassicScript(src) {
     script.addEventListener('error', () => {
       script.remove();
       playerScriptPromise = null;
-      reject(new Error('Не удалось загрузить скрипт плеера.'));
+      reject(new Error('Не удалось загрузить локальный скрипт плеера.'));
     }, { once: true });
     document.head.appendChild(script);
   });
@@ -59,10 +61,106 @@ function setPlayerState(state, message) {
   status.textContent = message || '';
 }
 
+function setPlayerSourceLabel(text = '') {
+  const label = document.querySelector('#playerSourceLabel');
+  if (label) label.textContent = text;
+}
+
+function destroyPlayer(container) {
+  try { activePlayerInstance?.$destroy?.(); } catch {}
+  activePlayerInstance = null;
+  if (container) container.innerHTML = '';
+}
+
+function hardenIframe(iframe) {
+  if (!(iframe instanceof HTMLIFrameElement)) return;
+  iframe.allowFullscreen = true;
+  iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
+  if (playerProtectedMode) {
+    // No allow-popups / allow-top-navigation: ads cannot open new tabs or replace MVPoisk.
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-presentation');
+  } else {
+    iframe.removeAttribute('sandbox');
+  }
+}
+
+function watchPlayerIframes(container) {
+  const apply = () => container.querySelectorAll('iframe').forEach(hardenIframe);
+  apply();
+  const observer = new MutationObserver(apply);
+  observer.observe(container, { childList: true, subtree: true });
+  return observer;
+}
+
+function hasPlayableData(payload) {
+  return Array.isArray(payload?.data) && payload.data.some(item => item?.iframeUrl);
+}
+
+function startPlayerAttempt(movie, backend, container) {
+  destroyPlayer(container);
+  setPlayerSourceLabel(`Подключение: ${backend.name}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let frameSeen = false;
+    const finish = (ok, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      observer.disconnect();
+      ok ? resolve(value) : reject(value instanceof Error ? value : new Error(String(value || 'Ошибка плеера')));
+    };
+
+    const observer = new MutationObserver(() => {
+      const iframe = container.querySelector('iframe');
+      if (iframe) {
+        frameSeen = true;
+        hardenIframe(iframe);
+        // The Kinobox UI has already selected a valid iframe URL at this point.
+        finish(true, { backend, iframe });
+      }
+    });
+    observer.observe(container, { childList: true, subtree: true });
+
+    const timer = window.setTimeout(() => {
+      finish(false, new Error(`${backend.name}: таймаут ответа`));
+    }, CONFIG.PLAYER_ATTEMPT_TIMEOUT_MS);
+
+    try {
+      activePlayerInstance = window.kinobox('#kinoboxPlayer', {
+        baseUrl: backend.url,
+        search: { kinopoisk: String(movie.id) },
+        events: {
+          playerLoaded(payload) {
+            if (payload?.error) {
+              finish(false, new Error(payload.error.title || `${backend.name}: источник вернул ошибку`));
+              return;
+            }
+            if (!hasPlayableData(payload)) {
+              finish(false, new Error(`${backend.name}: видео не найдено`));
+              return;
+            }
+            const iframe = container.querySelector('iframe');
+            if (iframe) {
+              frameSeen = true;
+              hardenIframe(iframe);
+              finish(true, { backend, iframe });
+            }
+          }
+        }
+      });
+    } catch (error) {
+      finish(false, error);
+    }
+  });
+}
+
 async function initEmbeddedPlayer(movie) {
   const section = document.querySelector('#watchSection');
   const container = document.querySelector('#kinoboxPlayer');
   const button = document.querySelector('#watchButton');
+  const compatibilityButton = document.querySelector('#compatibilityButton');
   if (!section || !container || playerInitStarted) {
     section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
@@ -72,53 +170,71 @@ async function initEmbeddedPlayer(movie) {
   section.hidden = false;
   button?.setAttribute('aria-busy', 'true');
   button?.classList.add('is-loading');
-  setPlayerState('loading', 'Подключаем плеер…');
+  setPlayerState('loading', 'Подключаем встроенный просмотр…');
+  setPlayerSourceLabel('');
   section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  let ready = false;
-  const markReady = () => {
-    if (ready) return;
-    ready = true;
-    setPlayerState('ready', '');
-    button?.removeAttribute('aria-busy');
-    button?.classList.remove('is-loading');
-    button && (button.textContent = '▶ Плеер открыт');
-  };
-
-  const observer = new MutationObserver(() => {
-    if (container.querySelector('iframe, video') || container.children.length > 0) markReady();
-  });
-  observer.observe(container, { childList: true, subtree: true });
 
   try {
     await loadClassicScript(CONFIG.PLAYER_SCRIPT_URL);
     if (typeof window.kinobox !== 'function') {
-      throw new Error('Скрипт загрузился, но функция kinobox недоступна.');
+      throw new Error('Локальный Kinobox загружен, но функция запуска недоступна.');
     }
 
-    window.kinobox('#kinoboxPlayer', {
-      baseUrl: CONFIG.PLAYER_BASE_URL,
-      search: { kinopoisk: String(movie.id) }
-    });
-
-    if (container.children.length > 0) markReady();
-
-    window.setTimeout(() => {
-      if (!ready) {
-        observer.disconnect();
-        setPlayerState('error', 'Плеер не ответил. Возможно, партнёр ограничивает запуск с GitHub Pages. Используйте резервную кнопку ниже.');
-        button?.removeAttribute('aria-busy');
-        button?.classList.remove('is-loading');
-        playerInitStarted = false;
+    let lastError = null;
+    let result = null;
+    for (let i = 0; i < CONFIG.PLAYER_BACKENDS.length; i += 1) {
+      const backend = CONFIG.PLAYER_BACKENDS[i];
+      setPlayerState('loading', i === 0
+        ? `Пробуем ${backend.name.toLowerCase()} источник…`
+        : `Первый источник не ответил. Пробуем ${backend.name.toLowerCase()}…`);
+      try {
+        result = await startPlayerAttempt(movie, backend, container);
+        break;
+      } catch (error) {
+        lastError = error;
+        console.warn('MVPoisk player backend failed:', backend.url, error);
       }
-    }, 15000);
+    }
+
+    if (!result) throw lastError || new Error('Нет доступных источников.');
+
+    watchPlayerIframes(container);
+    setPlayerSourceLabel(`Источник: ${result.backend.name} • защита от pop-up включена`);
+    setPlayerState('ready', '');
+    button?.removeAttribute('aria-busy');
+    button?.classList.remove('is-loading');
+    if (button) button.textContent = '▶ Плеер открыт';
+    if (compatibilityButton) compatibilityButton.hidden = false;
   } catch (error) {
     console.error('MVPoisk player error:', error);
-    observer.disconnect();
-    setPlayerState('error', 'Не удалось встроить плеер. Откройте фильм на GGpoisk кнопкой ниже.');
+    destroyPlayer(container);
+    setPlayerSourceLabel('');
+    setPlayerState('error', 'Не удалось получить встроенный плеер ни от партнёрского, ни от резервного источника. Резервная ссылка на GGpoisk остаётся ниже.');
     button?.removeAttribute('aria-busy');
     button?.classList.remove('is-loading');
     playerInitStarted = false;
+  }
+}
+
+function enableCompatibilityMode() {
+  const container = document.querySelector('#kinoboxPlayer');
+  const button = document.querySelector('#compatibilityButton');
+  const iframe = container?.querySelector('iframe');
+  if (!iframe || !playerProtectedMode) return;
+
+  playerProtectedMode = false;
+  const src = iframe.src;
+  iframe.removeAttribute('sandbox');
+  setPlayerSourceLabel('Режим совместимости • защита от pop-up для плеера отключена');
+  if (button) {
+    button.textContent = 'Режим совместимости включён';
+    button.disabled = true;
+  }
+
+  // Reload only the player frame so the relaxed sandbox takes effect.
+  if (src) {
+    iframe.src = 'about:blank';
+    requestAnimationFrame(() => { iframe.src = src; });
   }
 }
 
@@ -209,8 +325,11 @@ function renderMovie(movie) {
           <div class="player-status" id="playerStatus">Нажмите «Смотреть», чтобы загрузить плеер.</div>
           <div class="kinobox" id="kinoboxPlayer" data-kinopoisk="${movie.id}"></div>
         </div>
+        <div class="player-meta-line">
+          <span id="playerSourceLabel">Защита от pop-up включается автоматически.</span>
+        </div>
         <div class="player-fallback-actions">
-          <span>Если встроенный просмотр не работает:</span>
+          <button class="secondary-button compatibility-button" id="compatibilityButton" type="button" hidden>Плеер не запускается? Режим совместимости</button>
           <a class="secondary-button" href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть на GGpoisk ↗</a>
         </div>
       </section>
@@ -232,6 +351,7 @@ function renderMovie(movie) {
   bindImageFallbacks(root);
 
   document.querySelector('#watchButton')?.addEventListener('click', () => initEmbeddedPlayer(movie));
+  document.querySelector('#compatibilityButton')?.addEventListener('click', enableCompatibilityMode);
 
   if (location.hash === '#watch') {
     window.setTimeout(() => initEmbeddedPlayer(movie), 100);

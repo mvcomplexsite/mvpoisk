@@ -5,8 +5,16 @@ export const CONFIG = Object.freeze({
   API_KEY: 'MD2PV7Q-WPYM4Y8-GKQER3G-10WHNCP',
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
-  PLAYER_SCRIPT_URL: 'https://phobplay.top/kinobox.js',
-  PLAYER_BASE_URL: 'https://fbhdplay.top/',
+
+  // The Kinobox client is hosted locally so content blockers cannot block
+  // the player bootstrap script itself. Backends are tried in order.
+  PLAYER_SCRIPT_URL: './js/kinobox.js?v=5',
+  PLAYER_BACKENDS: [
+    { name: 'Партнёрский', url: 'https://fbhdplay.top/' },
+    { name: 'Резервный Kinobox', url: 'https://api.kinobox.tv/' },
+  ],
+  PLAYER_ATTEMPT_TIMEOUT_MS: 9000,
+
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,
 });
