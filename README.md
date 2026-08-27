@@ -10,7 +10,7 @@
 - отзывы, актёры, похожие фильмы;
 - встроенный просмотр по KinoPoisk ID;
 - локальная копия `js/kinobox.js`, поэтому блокировщик не может отрезать сам bootstrap-скрипт по стороннему домену;
-- автоматический fallback плеера: сначала партнёрский backend `https://fbhdplay.top/`, затем `https://api.kinobox.tv/`;
+- автоматический fallback плеера: сначала партнёрский endpoint `https://fbhdplay.top/api/players`, затем документированный Kinobox `https://kinobox.tv/api/players`;
 - верхний iframe плеера запускается в защищённом sandbox без `allow-popups` и без разрешения top-navigation;
 - если конкретный видеобалансер не работает в sandbox, есть ручная кнопка «Режим совместимости»;
 - резервная ссылка на GGpoisk остаётся доступной.
@@ -26,3 +26,7 @@
 Загрузите содержимое папки в корень репозитория и включите:
 
 Settings → Pages → Deploy from a branch → main → /(root)
+
+## v6 player change
+
+The embedded player no longer relies on the uploaded Kinobox bootstrap script to decide whether a backend succeeded. MVPoisk queries `/api/players?kinopoisk=<id>` itself, validates real `iframeUrl` values, renders its own source selector, and only then creates the iframe. Endpoints are tried in order: partner backend, then the documented Kinobox endpoint `https://kinobox.tv/api/players`.

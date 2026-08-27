@@ -57,3 +57,12 @@ img[hidden]{display:none!important}
 .compatibility-button{cursor:pointer}
 .compatibility-button:disabled{opacity:.58;cursor:default}
 @media(max-width:700px){.player-meta-line{justify-content:flex-start}.player-fallback-actions>*{width:100%}}
+
+/* MVPoisk direct player (v6) */
+.mv-player-toolbar{display:flex;gap:8px;overflow-x:auto;padding:10px 10px 8px;background:#0e0e11;border-bottom:1px solid #26262d;scrollbar-width:thin}
+.mv-player-source{flex:0 0 auto;border:1px solid #30303a;background:#18181e;color:#d8d8e1;border-radius:10px;padding:9px 12px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:.16s ease}
+.mv-player-source:hover{border-color:#7546d7;background:#211a2c}
+.mv-player-source.is-active{background:#8d4df4;border-color:#a76aff;color:#fff;box-shadow:0 0 24px rgba(141,77,244,.18)}
+.mv-player-frame-host{position:relative;width:100%;aspect-ratio:16/9;min-height:360px;background:#111;overflow:hidden}
+.mv-player-frame{display:block;width:100%;height:100%;position:absolute;inset:0;border:0;background:#111}
+@media (max-width:700px){.mv-player-frame-host{min-height:0;aspect-ratio:16/9}.mv-player-source{font-size:12px;padding:8px 10px}}

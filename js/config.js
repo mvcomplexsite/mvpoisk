@@ -6,14 +6,13 @@ export const CONFIG = Object.freeze({
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
 
-  // The Kinobox client is hosted locally so content blockers cannot block
-  // the player bootstrap script itself. Backends are tried in order.
-  PLAYER_SCRIPT_URL: './js/kinobox.js?v=5',
-  PLAYER_BACKENDS: [
-    { name: 'Партнёрский', url: 'https://fbhdplay.top/' },
-    { name: 'Резервный Kinobox', url: 'https://api.kinobox.tv/' },
+  // Player discovery endpoints. MVPoisk reads the JSON itself and only embeds
+  // a frame after a real iframeUrl has been returned.
+  PLAYER_APIS: [
+    { name: 'Партнёрский', url: 'https://fbhdplay.top/api/players' },
+    { name: 'Kinobox', url: 'https://kinobox.tv/api/players' },
   ],
-  PLAYER_ATTEMPT_TIMEOUT_MS: 9000,
+  PLAYER_API_TIMEOUT_MS: 8000,
 
   PAGE_SIZE: 20,
   CACHE_TTL_MS: 10 * 60 * 1000,
