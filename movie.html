@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#07070b" />
+  <title>Фильм — MVPoisk</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="movie-page">
+  <header class="site-header movie-header">
+    <a class="brand" href="./" aria-label="MVPoisk — на главную"><span class="brand-mark">MV</span><span>Poisk</span></a>
+    <a class="back-link" href="./">← К каталогу</a>
+  </header>
+
+  <main id="movieRoot">
+    <div class="movie-loader" id="movieLoader">
+      <div class="spinner"></div>
+      <span>Загружаем фильм…</span>
+    </div>
+  </main>
+
+  <footer>
+    <a class="brand brand-small" href="./"><span class="brand-mark">MV</span><span>Poisk</span></a>
+    <p>Информация о кино предоставляется через ПоискКино API.</p>
+  </footer>
+
+  <script type="module" src="js/movie.js"></script>
+</body>
+</html>
