@@ -1,261 +1,40 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=11';
-import { CONFIG, getWatchUrl } from './config.js?v=11';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=11';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=13';
+import { getWatchUrl } from './config.js?v=13';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=13';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
 const kpId = params.get('id');
 
 function esc(value = '') {
-  return String(value).replace(/[&<>'"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#039;', '"':'&quot;' }[ch]));
+  return String(value).replace(/[&<>'"]/g, ch => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#039;', '"':'&quot;'
+  }[ch]));
 }
-function img(url, width) { return url ? esc(imageUrl(url, { width })) : ''; }
-function score(v) { const n = Number(v || 0); return n ? n.toFixed(1) : '—'; }
-function scoreClass(v) { const n=Number(v||0); return n>=7.5?'rating-high':n>=6?'rating-mid':n?'rating-low':'rating-muted'; }
-function runtime(min) {
-  if (!min) return '';
-  const h = Math.floor(min / 60), m = min % 60;
+
+function img(url, width) {
+  return url ? esc(imageUrl(url, { width })) : '';
+}
+
+function score(value) {
+  const number = Number(value || 0);
+  return number ? number.toFixed(1) : '—';
+}
+
+function scoreClass(value) {
+  const number = Number(value || 0);
+  return number >= 7.5 ? 'rating-high' : number >= 6 ? 'rating-mid' : number ? 'rating-low' : 'rating-muted';
+}
+
+function runtime(minutes) {
+  if (!minutes) return '';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
   return [h ? `${h} ч` : '', m ? `${m} мин` : ''].filter(Boolean).join(' ');
 }
-function firstText(...values) { return values.find(v => typeof v === 'string' && v.trim()) || ''; }
 
-
-let playerInitStarted = false;
-let playerProtectionEnabled = false;
-let activePlayerUrl = '';
-let activePlayerLabel = '';
-let playerLoadTimer = null;
-let availablePlayers = [];
-
-function setPlayerState(state, message) {
-  const shell = document.querySelector('#playerShell');
-  const status = document.querySelector('#playerStatus');
-  if (!shell || !status) return;
-  shell.dataset.state = state;
-  status.textContent = message || '';
-}
-
-function setPlayerSourceLabel(text = '') {
-  const label = document.querySelector('#playerSourceLabel');
-  if (label) label.textContent = text;
-}
-
-function withTimeout(promise, ms = 12000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return { signal: controller.signal, done: promise(controller.signal).finally(() => clearTimeout(timer)) };
-}
-
-function normalizePlayers(payload) {
-  const raw = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.data)
-      ? payload.data
-      : Array.isArray(payload?.players)
-        ? payload.players
-        : [];
-
-  return raw.map((item, index) => {
-    const translations = Array.isArray(item?.translations) ? item.translations : [];
-    const fallbackTranslation = translations.find(t => t?.iframeUrl) || translations[0];
-    return {
-      source: String(item?.source || item?.type || `Источник ${index + 1}`),
-      iframeUrl: String(item?.iframeUrl || fallbackTranslation?.iframeUrl || ''),
-      translations,
-      success: item?.success !== false,
-    };
-  }).filter(item => item.success && /^https?:\/\//i.test(item.iframeUrl));
-}
-
-function playerProxyUrl(movie, source, searchMode = 'kinopoisk') {
-  const configured = String(CONFIG.PLAYER_PROXY_URL || '').trim();
-  if (!configured) return null;
-  const url = new URL(configured, location.href);
-  url.searchParams.set('source', source);
-
-  if (searchMode === 'kinopoisk' && movie.id) {
-    url.searchParams.set('kinopoisk', String(movie.id));
-  } else if (searchMode === 'imdb' && movie.externalId?.imdb) {
-    url.searchParams.set('imdb', String(movie.externalId.imdb));
-  } else if (searchMode === 'tmdb' && movie.externalId?.tmdb) {
-    url.searchParams.set('tmdb', String(movie.externalId.tmdb));
-  } else if (searchMode === 'title' && (movie.name || movie.alternativeName)) {
-    url.searchParams.set('title', String(movie.name || movie.alternativeName));
-  } else {
-    return null;
-  }
-  return url;
-}
-
-function proxyErrorDetails(payload) {
-  if (!payload || typeof payload !== 'object') return '';
-  const parts = [];
-  if (payload.upstream) parts.push(payload.upstream);
-  if (payload.status) parts.push(`HTTP ${payload.status}`);
-  if (payload.message) parts.push(payload.message);
-  if (payload.bodyPreview) parts.push(payload.bodyPreview.slice(0, 240));
-  return parts.join(' • ');
-}
-
-async function fetchPlayersAttempt(movie, source, searchMode) {
-  const url = playerProxyUrl(movie, source, searchMode);
-  if (!url) return { players: [], error: `${source}/${searchMode}: нет идентификатора` };
-
-  try {
-    const request = withTimeout(signal => fetch(url, {
-      signal,
-      headers: { Accept: 'application/json' },
-      cache: 'no-store',
-    }), 18000);
-    const response = await request.done;
-    let payload = null;
-    try {
-      payload = await response.json();
-    } catch (error) {
-      return { players: [], error: `${source}/${searchMode}: ответ не является JSON (${error?.message || 'parse error'})` };
-    }
-
-    if (!response.ok) {
-      const details = proxyErrorDetails(payload);
-      return { players: [], error: `${source}/${searchMode}: ${details || `proxy HTTP ${response.status}`}` };
-    }
-
-    const players = normalizePlayers(payload);
-    if (!players.length) {
-      return { players: [], error: `${source}/${searchMode}: источники не найдены` };
-    }
-
-    return { players, upstream: response.headers.get('X-MVPoisk-Upstream') || source, searchMode };
-  } catch (error) {
-    return { players: [], error: `${source}/${searchMode}: ${error?.name === 'AbortError' ? 'таймаут' : (error?.message || 'ошибка сети')}` };
-  }
-}
-
-async function fetchPlayersViaProxy(movie) {
-  const searchModes = ['kinopoisk'];
-  if (movie.externalId?.imdb) searchModes.push('imdb');
-  if (movie.externalId?.tmdb) searchModes.push('tmdb');
-  if (movie.name || movie.alternativeName) searchModes.push('title');
-
-  // Partner first because that is the integration already used by GGpoisk.
-  // Kinobox is the fallback. Each successful response is streamed by the Worker,
-  // so the Worker never buffers/parses the potentially large JSON body.
-  const errors = [];
-  for (const source of ['partner', 'kinobox']) {
-    for (const mode of searchModes) {
-      const result = await fetchPlayersAttempt(movie, source, mode);
-      if (result.players?.length) {
-        setPlayerSourceLabel(`MVPoisk proxy v11 • ${result.upstream}/${result.searchMode} • найдено источников: ${result.players.length}`);
-        return result.players;
-      }
-      if (result.error) errors.push(result.error);
-    }
-  }
-
-  throw new Error(errors.join(' | '));
-}
-
-function makePlayerFrame(url) {
-  const frame = document.createElement('iframe');
-  frame.className = 'mv-player-frame';
-  frame.src = url;
-  frame.allowFullscreen = true;
-  frame.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
-  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
-  if (playerProtectionEnabled) {
-    frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-presentation');
-  }
-  return frame;
-}
-
-function markFrameLoading(label) {
-  clearTimeout(playerLoadTimer);
-  setPlayerState('loading', `Загружаем ${label}…`);
-  playerLoadTimer = setTimeout(() => {
-    const shell = document.querySelector('#playerShell');
-    if (shell?.dataset.state === 'loading') {
-      setPlayerState('error', 'Плеер не ответил. Попробуйте другой источник или резервную ссылку ниже.');
-      setPlayerSourceLabel(`${label} • таймаут загрузки iframe`);
-    }
-  }, 18000);
-}
-
-function renderPlayerFrame(url, label) {
-  const host = document.querySelector('#playerFrameHost');
-  if (!host || !url) return;
-  activePlayerUrl = url;
-  activePlayerLabel = label;
-  host.innerHTML = '';
-  const frame = makePlayerFrame(url);
-  markFrameLoading(label);
-  frame.addEventListener('load', () => {
-    clearTimeout(playerLoadTimer);
-    setPlayerState('ready', '');
-    setPlayerSourceLabel(`${label} • iframe загружен${playerProtectionEnabled ? ' • защита от pop-up включена' : ' • режим совместимости'}`);
-  }, { once: true });
-  host.appendChild(frame);
-}
-
-function renderPlayerMenu(players) {
-  const toolbar = document.querySelector('#playerToolbar');
-  if (!toolbar) return;
-  toolbar.innerHTML = players.map((player, index) => `
-    <button class="mv-player-source${index === 0 ? ' is-active' : ''}" type="button" data-player-index="${index}">${esc(player.source)}</button>
-  `).join('');
-  toolbar.hidden = players.length < 2;
-  toolbar.querySelectorAll('[data-player-index]').forEach(button => {
-    button.addEventListener('click', () => {
-      const index = Number(button.dataset.playerIndex);
-      const player = availablePlayers[index];
-      if (!player) return;
-      toolbar.querySelectorAll('.mv-player-source').forEach(el => el.classList.remove('is-active'));
-      button.classList.add('is-active');
-      renderPlayerFrame(player.iframeUrl, player.source);
-    });
-  });
-}
-
-function togglePlayerProtection() {
-  playerProtectionEnabled = !playerProtectionEnabled;
-  const button = document.querySelector('#compatibilityButton');
-  if (button) {
-    button.textContent = playerProtectionEnabled
-      ? 'Отключить защиту (совместимость)'
-      : 'Включить защиту от pop-up';
-  }
-  if (activePlayerUrl) renderPlayerFrame(activePlayerUrl, activePlayerLabel || 'Плеер');
-}
-
-async function initEmbeddedPlayer(movie) {
-  const section = document.querySelector('#watchSection');
-  const button = document.querySelector('#watchButton');
-  if (!section) return;
-
-  section.hidden = false;
-  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  document.querySelector('#compatibilityButton')?.removeAttribute('hidden');
-
-  if (playerInitStarted) return;
-  playerInitStarted = true;
-  button?.setAttribute('aria-busy', 'true');
-  button?.classList.add('is-loading');
-  if (button) button.textContent = '▶ Открываем плеер…';
-
-  try {
-    if (!String(CONFIG.PLAYER_PROXY_URL || '').trim()) throw new Error('PLAYER_PROXY_URL не настроен');
-    setPlayerState('loading', 'Получаем список источников через MVPoisk proxy…');
-    availablePlayers = await fetchPlayersViaProxy(movie);
-    renderPlayerMenu(availablePlayers);
-    renderPlayerFrame(availablePlayers[0].iframeUrl, availablePlayers[0].source);
-  } catch (error) {
-    console.warn('MVPoisk player proxy failed:', error);
-    setPlayerState('error', 'Не удалось получить рабочий плеер через MVPoisk proxy. Резервная ссылка на GGpoisk остаётся ниже.');
-    setPlayerSourceLabel(`Proxy: ${error?.message || 'неизвестная ошибка'}`);
-  } finally {
-    button?.removeAttribute('aria-busy');
-    button?.classList.remove('is-loading');
-    if (button) button.textContent = '▶ Плеер открыт';
-  }
+function firstText(...values) {
+  return values.find(value => typeof value === 'string' && value.trim()) || '';
 }
 
 function personCard(person) {
@@ -268,7 +47,7 @@ function personCard(person) {
 
 function similarCard(movie) {
   const posters = [movie.poster?.url, movie.poster?.previewUrl].filter(Boolean);
-  return `<a class="similar-card" href="movie.html?id=${movie.id}">
+  return `<a class="similar-card" href="movie.html?id=${encodeURIComponent(movie.id)}">
     <div><span>MV</span>${posters.length ? `<img ${imageAttrs(posters, { width: 420 })} alt="${esc(movie.name || '')}" loading="lazy" decoding="async">` : ''}</div>
     <strong>${esc(movie.name || movie.alternativeName || 'Без названия')}</strong>
     <small>${esc([movie.year, movie.rating?.kp ? `КП ${score(movie.rating.kp)}` : ''].filter(Boolean).join(' • '))}</small>
@@ -295,7 +74,9 @@ function renderMovie(movie) {
   const genres = (movie.genres || []).map(g => g.name).join(' • ');
   const countries = (movie.countries || []).map(c => c.name).join(', ');
   const description = firstText(movie.description, movie.shortDescription, 'Описание пока отсутствует.');
-  const people = (movie.persons || []).filter(p => ['актеры', 'актер', 'actor'].includes(String(p.profession || '').toLowerCase())).slice(0, 12);
+  const people = (movie.persons || [])
+    .filter(p => ['актеры', 'актер', 'actor'].includes(String(p.profession || '').toLowerCase()))
+    .slice(0, 12);
   const meta = [movie.year, genres, runtime(movie.movieLength), movie.ageRating ? `${movie.ageRating}+` : ''].filter(Boolean).join(' • ');
   const watchUrl = getWatchUrl(movie.id);
 
@@ -320,9 +101,10 @@ function renderMovie(movie) {
           </div>
           <p class="movie-description">${esc(description)}</p>
           <div class="movie-actions">
-            <button class="watch-button" id="watchButton" type="button">▶ Смотреть</button>
+            <a class="watch-button" href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer"><span class="watch-play">▶</span><span>Смотреть</span></a>
             <a class="secondary-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer">Кинопоиск ↗</a>
           </div>
+          <div class="watch-hint"><span></span>Просмотр откроется на партнёрском сайте GGpoisk</div>
         </div>
       </div>
     </section>
@@ -335,28 +117,6 @@ function renderMovie(movie) {
         <div><span>Длительность</span><strong>${esc(runtime(movie.movieLength) || '—')}</strong></div>
         <div><span>KinoPoisk ID</span><strong>${movie.id}</strong></div>
       </section>
-
-      <section class="content-section watch-section" id="watchSection" hidden>
-        <div class="section-heading watch-heading">
-          <div><span class="eyebrow">Просмотр</span><h2>${movie.isSeries ? 'Смотреть сериал' : 'Смотреть фильм'}</h2></div>
-          <span class="player-kp-id">KinoPoisk ID ${movie.id}</span>
-        </div>
-        <div class="player-shell" id="playerShell" data-state="idle">
-          <div class="player-status" id="playerStatus">Нажмите «Смотреть», чтобы загрузить плеер.</div>
-          <div class="mv-player-stack" id="kinoboxPlayer">
-            <div class="mv-player-toolbar" id="playerToolbar" hidden></div>
-            <div class="mv-player-frame-host" id="playerFrameHost"></div>
-          </div>
-        </div>
-        <div class="player-meta-line">
-          <span id="playerSourceLabel">По умолчанию используется режим совместимости; защиту от pop-up можно включить вручную.</span>
-        </div>
-        <div class="player-fallback-actions">
-          <button class="secondary-button compatibility-button" id="compatibilityButton" type="button" hidden>Включить защиту от pop-up</button>
-          <a class="secondary-button" href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть на GGpoisk ↗</a>
-        </div>
-      </section>
-
 
       ${people.length ? `<section class="content-section"><div class="section-heading"><div><span class="eyebrow">В ролях</span><h2>Актёры</h2></div></div><div class="people-row">${people.map(personCard).join('')}</div></section>` : ''}
 
@@ -372,15 +132,7 @@ function renderMovie(movie) {
     </div>`;
 
   bindImageFallbacks(root);
-
-  document.querySelector('#watchButton')?.addEventListener('click', () => initEmbeddedPlayer(movie));
-  document.querySelector('#compatibilityButton')?.addEventListener('click', togglePlayerProtection);
-
-  if (location.hash === '#watch') {
-    window.setTimeout(() => initEmbeddedPlayer(movie), 100);
-  }
 }
-
 
 async function loadExtras(movie) {
   const [reviewsResult, similarResult] = await Promise.allSettled([
@@ -397,10 +149,13 @@ async function loadExtras(movie) {
   }
 
   if (similarResult.status === 'fulfilled') {
-    const movies = (similarResult.value?.docs || []).filter(m => Number(m.id) !== Number(movie.id)).slice(0, 10);
+    const movies = (similarResult.value?.docs || [])
+      .filter(item => Number(item.id) !== Number(movie.id))
+      .slice(0, 10);
     if (movies.length) {
-      document.querySelector('#similarGrid').innerHTML = movies.map(similarCard).join('');
-      bindImageFallbacks(document.querySelector('#similarGrid'));
+      const grid = document.querySelector('#similarGrid');
+      grid.innerHTML = movies.map(similarCard).join('');
+      bindImageFallbacks(grid);
       document.querySelector('#similarSection').hidden = false;
     }
   }
@@ -418,7 +173,11 @@ async function init() {
     loadExtras(movie);
   } catch (error) {
     console.error(error);
-    const text = error?.status === 404 ? 'Фильм с таким KinoPoisk ID не найден.' : error?.status === 429 ? 'Лимит запросов API исчерпан.' : 'Не удалось загрузить страницу фильма.';
+    const text = error?.status === 404
+      ? 'Фильм с таким KinoPoisk ID не найден.'
+      : error?.status === 429
+        ? 'Лимит запросов API исчерпан.'
+        : 'Не удалось загрузить страницу фильма.';
     root.innerHTML = `<div class="page-error"><h1>${esc(text)}</h1><p>KinoPoisk ID: ${esc(kpId)}</p><a href="./">Вернуться в каталог</a></div>`;
   }
 }

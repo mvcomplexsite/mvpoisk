@@ -30,62 +30,24 @@
 img[hidden]{display:none!important}
 
 
-/* Embedded partner player */
-.watch-section{scroll-margin-top:28px}
-.watch-heading{align-items:center}
-.player-kp-id{font-size:11px;color:#76717f;border:1px solid var(--line);border-radius:999px;padding:8px 11px}
-.player-shell{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:22px;background:#0b0a10;box-shadow:0 25px 70px rgba(0,0,0,.35)}
-.player-shell::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 40%,rgba(141,92,255,.14),transparent 50%),linear-gradient(135deg,#11101a,#09090d);z-index:0}
-.kinobox{position:relative;z-index:2;width:100%;height:100%;min-height:100%}
-.kinobox>iframe,.kinobox iframe{max-width:100%}
-.player-status{position:absolute;z-index:3;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:28px;color:#a9a4b2;font-size:13px;line-height:1.6;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
-.player-shell[data-state="loading"] .player-status::before{content:"";width:22px;height:22px;margin-right:12px;border-radius:50%;border:2px solid rgba(255,255,255,.12);border-top-color:#a875ff;animation:spin .8s linear infinite;flex:none}
-.player-shell[data-state="ready"] .player-status{opacity:0;visibility:hidden}
-.player-shell[data-state="error"] .player-status{color:#e3b2b2;background:rgba(30,10,14,.52);pointer-events:auto}
-.player-fallback-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:12px;color:#77727f;font-size:11px}
-.player-fallback-actions .secondary-button{min-height:40px;padding:0 14px;font-size:12px}
-.watch-button{border:0;color:#fff}
-.watch-button.is-loading{opacity:.72;cursor:wait}
-
-@media(max-width:700px){
-  .watch-heading{align-items:flex-end}.player-kp-id{display:none}.player-shell{border-radius:16px}.player-fallback-actions{align-items:stretch;flex-direction:column}.player-fallback-actions .secondary-button{width:100%}
-}
-
-/* v5: local Kinobox + safer embed controls */
-.player-meta-line{display:flex;justify-content:flex-end;margin-top:10px;color:#77727f;font-size:11px;line-height:1.5}
-.player-fallback-actions{flex-wrap:wrap}
-.compatibility-button{cursor:pointer}
-.compatibility-button:disabled{opacity:.58;cursor:default}
-@media(max-width:700px){.player-meta-line{justify-content:flex-start}.player-fallback-actions>*{width:100%}}
-
-/* MVPoisk direct player (v6) */
-.mv-player-toolbar{display:flex;gap:8px;overflow-x:auto;padding:10px 10px 8px;background:#0e0e11;border-bottom:1px solid #26262d;scrollbar-width:thin}
-.mv-player-source{flex:0 0 auto;border:1px solid #30303a;background:#18181e;color:#d8d8e1;border-radius:10px;padding:9px 12px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:.16s ease}
-.mv-player-source:hover{border-color:#7546d7;background:#211a2c}
-.mv-player-source.is-active{background:#8d4df4;border-color:#a76aff;color:#fff;box-shadow:0 0 24px rgba(141,77,244,.18)}
-.mv-player-frame-host{position:relative;width:100%;aspect-ratio:16/9;min-height:360px;background:#111;overflow:hidden}
-.mv-player-frame{display:block;width:100%;height:100%;position:absolute;inset:0;border:0;background:#111}
-@media (max-width:700px){.mv-player-frame-host{min-height:0;aspect-ratio:16/9}.mv-player-source{font-size:12px;padding:8px 10px}}
-
-
-/* MVPoisk v8: official Kinobox embed */
-#kinoboxPlayer.kinobox_player{position:relative;z-index:2;width:100%;height:100%;min-height:100%;background:#111}
-#kinoboxPlayer.kinobox_player>section{width:100%;height:100%;min-height:100%}
-#kinoboxPlayer.kinobox_player iframe{max-width:100%;border:0}
-.player-shell[data-state="ready"] #kinoboxPlayer{opacity:1}
-.player-shell[data-state="loading"] #kinoboxPlayer{opacity:.92}
-
-
-/* MVPoisk v9: search suggestions are in document flow — no overlap with filters/cards. */
+/* Stable search suggestions: they stay in normal document flow and never overlap filters. */
 .search-area{position:relative;max-width:780px;margin:0 auto;text-align:left}
 .search-area>.search-shell{max-width:none;margin:0}
-.search-area>.suggestions{position:relative;left:auto;right:auto;top:auto;margin-top:10px;max-height:min(360px,52vh);overflow:auto;z-index:1;overscroll-behavior:contain}
+.search-area>.suggestions{position:relative;left:auto;right:auto;top:auto;margin-top:10px;max-height:min(330px,48vh);overflow:auto;z-index:1;overscroll-behavior:contain;background:#111018;border:1px solid rgba(255,255,255,.10);box-shadow:0 22px 65px rgba(0,0,0,.42)}
 .search-area>.suggestions[hidden]{display:none}
-@media(max-width:700px){.search-area>.suggestions{max-height:min(330px,48vh)}}
+.suggestion-row{min-height:76px}
+.suggestion-row+.suggestion-row{border-top:1px solid rgba(255,255,255,.045)}
 
-/* MVPoisk v9 player stack */
-.mv-player-stack{position:relative;z-index:2;width:100%;height:100%;display:flex;flex-direction:column;background:#0b0a10}
-.mv-player-stack .mv-player-frame-host{flex:1 1 auto;min-height:0;aspect-ratio:auto}
-.mv-player-stack .mv-player-toolbar{flex:0 0 auto}
-.player-shell[data-state="error"] .mv-player-stack{opacity:.35}
-.player-shell[data-state="ready"] .mv-player-stack{opacity:1}
+/* Stable external watch action. */
+.watch-button{border:0;color:#fff;gap:9px;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}
+.watch-button:hover{transform:translateY(-2px);filter:brightness(1.06);box-shadow:0 16px 42px rgba(141,92,255,.34)}
+.watch-play{font-size:12px;transform:translateY(-.5px)}
+.watch-hint{display:flex;align-items:center;gap:8px;margin-top:12px;color:#77727f;font-size:11px;line-height:1.5}
+.watch-hint>span{width:6px;height:6px;border-radius:999px;background:#52d283;box-shadow:0 0 14px rgba(82,210,131,.42);flex:none}
+.secondary-button{transition:border-color .18s ease,background .18s ease,color .18s ease}
+.secondary-button:hover{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.09);color:#fff}
+
+@media(max-width:700px){
+  .search-area>.suggestions{max-height:min(310px,45vh)}
+  .watch-hint{font-size:10px}
+}

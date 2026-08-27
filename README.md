@@ -1,15 +1,28 @@
-# MVPoisk v10 — Worker подключён
+# MVPoisk — stable GitHub Pages build
 
-Подключён Worker: `https://mvpoisk.cizikvpn.workers.dev/players`.
+Статический каталог фильмов и сериалов для GitHub Pages.
 
-Схема: MVPoisk → Worker → upstream `/api/players` → реальный `iframeUrl` → iframe на странице.
+## Что работает
 
-Прямой Kinobox embed удалён, так как он давал Angie 404.
+- поиск с подсказками без наложения на фильтры;
+- фильтры по типу, жанру, году и рейтингу;
+- карточки с постерами и рейтингами;
+- fallback-цепочка изображений через `wsrv.nl` и прямые URL;
+- страница фильма/сериала по настоящему KinoPoisk ID (`movie.html?id=...`);
+- актёры, отзывы, похожие фильмы;
+- кнопка **Смотреть** открывает GGpoisk по тому же KinoPoisk ID;
+- адаптивная вёрстка.
 
-Проверка Worker: `https://mvpoisk.cizikvpn.workers.dev/players?kinopoisk=1309707`.
+## GitHub Pages
 
-## v11 — streaming Worker
-Cloudflare Worker no longer parses upstream JSON. Successful responses are streamed directly to the browser to avoid `Memory limit would be exceeded before EOF`.
+Загрузите содержимое архива в корень репозитория и включите:
 
-Important: redeploy `worker/worker.js` in the existing Cloudflare Worker, then upload the v11 site files to GitHub Pages.
-The frontend tries `partner` and `kinobox`, first by KinoPoisk ID and then by available fallback identifiers.
+`Settings → Pages → Deploy from a branch → main → /(root)`
+
+## Просмотр
+
+Ссылка формируется централизованно в `js/config.js`:
+
+`https://www.ggpoisk.ru/film/{KinoPoiskID}/?socialAlias=...`
+
+Экспериментальный встроенный плеер и Worker удалены из стабильной версии.
