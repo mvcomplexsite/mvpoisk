@@ -1,6 +1,7 @@
-import { CONFIG } from './config.js?v=23';
-import { getMovies, searchMovies } from './api.js?v=23';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=23';
+import { CONFIG } from './config.js?v=24';
+import { getMovies, searchMovies } from './api.js?v=24';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=24';
+import { getContinueWatching, dismissContinue } from './storage.js?v=24';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -10,6 +11,56 @@ const catalogTitle = $('#catalogTitle');
 const pagination = $('#pagination');
 const pageIndicator = $('#pageIndicator');
 const paginationPages = $('#paginationPages');
+const continueSection = $('#continueSection');
+const continueRow = $('#continueRow');
+
+function continueContext(item) {
+  const season = Number(item?.progress?.season);
+  const episode = Number(item?.progress?.episode);
+  if (item?.isSeries && season > 0 && episode > 0) return `${season} сезон, ${episode} серия`;
+  if (item?.isSeries) return 'Продолжить сериал';
+  return 'Продолжить фильм';
+}
+
+function continueCard(item) {
+  const title = item.name || item.alternativeName || 'Без названия';
+  const posters = [item.poster?.url, item.poster?.previewUrl].filter(Boolean);
+  const artwork = imageAttrs(posters, { width: 560 });
+  const percent = Number(item?.progress?.percent);
+  const hasProgress = Number.isFinite(percent) && percent > 0 && percent < 1;
+  return `<article class="continue-card">
+    <a class="continue-link" href="movie.html?id=${encodeURIComponent(item.id)}" aria-label="Продолжить: ${escapeHtml(title)}">
+      <div class="continue-art">
+        <div class="poster-fallback">MV</div>
+        ${artwork ? `<img ${artwork} alt="${escapeHtml(title)}" loading="lazy" decoding="async">` : ''}
+        <span class="continue-play" aria-hidden="true">▶</span>
+        ${hasProgress ? `<span class="continue-progress"><i style="width:${Math.round(percent * 100)}%"></i></span>` : ''}
+      </div>
+      <div class="continue-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(continueContext(item))}</span></div>
+    </a>
+    <button class="continue-dismiss" type="button" data-continue-dismiss="${item.id}" aria-label="Убрать ${escapeHtml(title)} из «Смотреть дальше»">×</button>
+  </article>`;
+}
+
+function renderContinueWatching() {
+  if (!continueSection || !continueRow) return;
+  const items = getContinueWatching(12);
+  continueSection.hidden = items.length === 0;
+  continueRow.innerHTML = items.map(continueCard).join('');
+  bindImageFallbacks(continueRow);
+}
+
+continueRow?.addEventListener('click', event => {
+  const button = event.target.closest('[data-continue-dismiss]');
+  if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dismissContinue(button.dataset.continueDismiss);
+  renderContinueWatching();
+});
+
+window.addEventListener('mvpoisk:storage-changed', renderContinueWatching);
+window.addEventListener('storage', renderContinueWatching);
 
 const state = {
   mode: 'catalog',
@@ -265,4 +316,5 @@ paginationPages.addEventListener('click', event => {
   goToPage(Number(button.dataset.page));
 });
 
+renderContinueWatching();
 loadCatalog();

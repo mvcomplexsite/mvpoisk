@@ -1,4 +1,4 @@
-import { getProfile, saveProfile, clearProfile, counts } from './storage.js?v=23';
+import { getProfile, saveProfile, clearProfile, counts } from './storage.js?v=24';
 
 function updateHeaderState() {
   const total = counts().watchLater + counts().favorites;
@@ -26,7 +26,7 @@ function ensureProfileModal() {
       <button class="modal-close" type="button" aria-label="Закрыть" data-modal-close>×</button>
       <span class="eyebrow">Локальный аккаунт</span>
       <h2 id="profileTitle">${profile ? 'Профиль' : 'Создать профиль'}</h2>
-      <p class="modal-copy">Имя, «Посмотрю позже» и избранное сохраняются только в этом браузере. Настоящую синхронизацию между устройствами можно подключить позже.</p>
+      <p class="modal-copy">Имя, списки, история просмотра и «Смотреть дальше» сохраняются только в этом браузере. Синхронизацию между устройствами можно подключить позже.</p>
       <form id="profileForm" class="profile-form">
         <label><span>Имя</span><input id="profileName" maxlength="32" autocomplete="nickname" placeholder="Например, Алекс" value="${escapeAttr(profile?.name || '')}"></label>
         <button class="primary-action" type="submit">${profile ? 'Сохранить' : 'Создать профиль'}</button>
@@ -133,7 +133,7 @@ function setupInstall() {
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { await navigator.serviceWorker.register('./sw.js?v=23'); } catch (error) { console.warn('PWA service worker:', error); }
+  try { await navigator.serviceWorker.register('./sw.js?v=24'); } catch (error) { console.warn('PWA service worker:', error); }
 }
 
 document.querySelectorAll('[data-profile-open]').forEach(node => node.addEventListener('click', openProfileModal));

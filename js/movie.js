@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=23';
-import { CONFIG, getWatchUrl } from './config.js?v=23';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=23';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=23';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=24';
+import { CONFIG, getWatchUrl } from './config.js?v=24';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=24';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=24';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -147,6 +147,127 @@ let playerTimer = null;
 let playerScriptPromise = null;
 let playerAttemptId = 0;
 let playerStarting = false;
+let telemetryBound = false;
+let lastTelemetryWrite = 0;
+
+function watchButtonLabel() {
+  if (!currentMovie) return 'Смотреть';
+  const entry = getHistoryEntry(currentMovie.id);
+  if (entry?.completed) return 'Смотреть снова';
+  if (entry) return 'Продолжить просмотр';
+  return 'Смотреть';
+}
+
+function updateWatchStateButtons() {
+  const watch = document.querySelector('[data-watch-action]');
+  if (watch && !playerStarting) {
+    const label = watch.querySelector('span:last-child');
+    if (label) label.textContent = watchButtonLabel();
+  }
+  const watched = document.querySelector('[data-watched-action]');
+  if (watched && currentMovie) {
+    const done = Boolean(getHistoryEntry(currentMovie.id)?.completed);
+    watched.classList.toggle('is-watched', done);
+    watched.setAttribute('aria-pressed', String(done));
+    watched.innerHTML = done ? '<span>✓</span><span>Просмотрено</span>' : '<span>✓</span><span>Отметить просмотренным</span>';
+  }
+}
+
+function rememberPlayerDiagnostic(event, kind, detected) {
+  try {
+    const key = 'mvpoisk:player-diagnostics:v1';
+    const old = JSON.parse(sessionStorage.getItem(key) || '[]');
+    const data = event?.data;
+    const keys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).slice(0, 16) : [];
+    const next = [{ at: Date.now(), origin: event?.origin || '', kind: String(kind || '').slice(0, 80), keys, detected }, ...old].slice(0, 25);
+    sessionStorage.setItem(key, JSON.stringify(next));
+  } catch {}
+}
+
+function numberFromObject(value, wanted, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 4) return null;
+  for (const [key, item] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (wanted.includes(normalized) && Number.isFinite(Number(item))) return Number(item);
+  }
+  for (const item of Object.values(value)) {
+    if (item && typeof item === 'object') {
+      const found = numberFromObject(item, wanted, depth + 1);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+function stringFromObject(value, wanted, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 3) return '';
+  for (const [key, item] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (wanted.includes(normalized) && (typeof item === 'string' || typeof item === 'number')) return String(item);
+  }
+  for (const item of Object.values(value)) {
+    if (item && typeof item === 'object') {
+      const found = stringFromObject(item, wanted, depth + 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+function parsePlayerMessage(raw) {
+  let data = raw;
+  if (typeof raw === 'string') {
+    const clean = raw.trim();
+    if (!(clean.startsWith('{') || clean.startsWith('['))) return null;
+    try { data = JSON.parse(clean); } catch { return null; }
+  }
+  if (!data || typeof data !== 'object') return null;
+  const kind = stringFromObject(data, ['event', 'type', 'name', 'method', 'action']);
+  const position = numberFromObject(data, ['currenttime', 'currentposition', 'position', 'playedtime', 'playbacktime']);
+  const duration = numberFromObject(data, ['duration', 'totalduration', 'totaltime', 'length']);
+  let percent = numberFromObject(data, ['percent', 'progress', 'percentage']);
+  if (Number.isFinite(percent) && percent > 1 && percent <= 100) percent /= 100;
+  const season = numberFromObject(data, ['season', 'seasonnumber', 'seasonnum']);
+  const episode = numberFromObject(data, ['episode', 'episodenumber', 'episodenum', 'series']);
+  return { kind, position, duration, percent, season, episode };
+}
+
+function bindPlayerTelemetry() {
+  if (telemetryBound) return;
+  telemetryBound = true;
+  window.addEventListener('message', event => {
+    if (!currentMovie) return;
+    const section = document.querySelector('#embeddedPlayerSection');
+    if (!section || section.hidden) return;
+    const frames = [...document.querySelectorAll('#embeddedPlayerHost iframe, #alternatePlayerHost iframe')];
+    const sourceMatches = frames.some(frame => {
+      try { return frame.contentWindow === event.source; } catch { return false; }
+    });
+    const parsed = parsePlayerMessage(event.data);
+    if (!parsed) return;
+    const recognizedKind = /(time|progress|playback|player|episode|season|ended|complete)/i.test(parsed.kind || '');
+    if (!sourceMatches && !recognizedKind) return;
+
+    const patch = {};
+    if (Number.isFinite(parsed.duration) && parsed.duration >= 180 && parsed.duration <= 24 * 60 * 60) patch.duration = parsed.duration;
+    if ('duration' in patch && Number.isFinite(parsed.position) && parsed.position >= 0 && parsed.position <= patch.duration * 1.1) patch.position = parsed.position;
+    if ('duration' in patch && Number.isFinite(parsed.percent) && parsed.percent >= 0 && parsed.percent <= 1) patch.percent = parsed.percent;
+    if (Number.isFinite(parsed.season) && parsed.season >= 0 && parsed.season < 1000) patch.season = parsed.season;
+    if (Number.isFinite(parsed.episode) && parsed.episode >= 0 && parsed.episode < 10000) patch.episode = parsed.episode;
+    const detected = Object.keys(patch);
+    rememberPlayerDiagnostic(event, parsed.kind, detected);
+    // Only persist playback state when the message came from an iframe that
+    // MVPoisk itself mounted. Other recognized messages remain diagnostics only.
+    if (!sourceMatches || !detected.length) return;
+
+    const now = Date.now();
+    const important = 'season' in patch || 'episode' in patch || patch.percent === 1;
+    if (!important && now - lastTelemetryWrite < 5000) return;
+    lastTelemetryWrite = now;
+    updatePlaybackProgress(currentMovie.id, patch);
+    updateWatchStateButtons();
+  });
+}
 
 // Reserve Kinobox path. Kept completely separate from the working Rendex path:
 // it is not downloaded or initialized until the user asks for another source.
@@ -203,7 +324,7 @@ function setPlayerStarting(value) {
   button.disabled = value;
   button.classList.toggle('is-loading', value);
   const label = button.querySelector('span:last-child');
-  if (label) label.textContent = value ? 'Подключаем…' : 'Смотреть';
+  if (label) label.textContent = value ? 'Подключаем…' : watchButtonLabel();
 }
 
 function markPlayerReady(iframe) {
@@ -326,6 +447,8 @@ async function startAlternatePlayer(force = false) {
   if (!section || !panel || !host) return;
   if (alternateStarting && !force) return;
 
+  recordWatchStart(currentMovie, 'alternate');
+  updateWatchStateButtons();
   const attemptId = ++alternateAttemptId;
   setAlternateStarting(true);
 
@@ -403,6 +526,8 @@ async function startEmbeddedPlayer(force = false) {
   if (!section || !host) return;
 
   if (playerStarting && !force) return;
+  recordWatchStart(currentMovie, 'primary');
+  updateWatchStateButtons();
   const attemptId = ++playerAttemptId;
   setPlayerStarting(true);
 
@@ -479,6 +604,10 @@ function bindWatchAction() {
 
   document.querySelectorAll('[data-partner-watch]').forEach(link => {
     link.addEventListener('click', event => {
+      if (currentMovie) {
+        recordWatchStart(currentMovie, 'partner');
+        updateWatchStateButtons();
+      }
       if (isWatchNoticeDismissed()) return;
       event.preventDefault();
       openWatchNotice(link.href);
@@ -560,6 +689,11 @@ function bindMovieActions() {
       updateListButtons();
     });
   });
+  document.querySelector('[data-watched-action]')?.addEventListener('click', () => {
+    if (!currentMovie) return;
+    toggleWatched(currentMovie);
+    updateWatchStateButtons();
+  });
 }
 
 function renderMovie(movie) {
@@ -593,9 +727,10 @@ function renderMovie(movie) {
           </div>
           <p class="movie-description">${esc(description)}</p>
           <div class="movie-actions movie-actions-primary">
-            <button class="watch-button" data-watch-action type="button"><span class="watch-play">▶</span><span>Смотреть</span></button>
+            <button class="watch-button" data-watch-action type="button"><span class="watch-play">▶</span><span>${esc(watchButtonLabel())}</span></button>
             <button class="secondary-button list-action" type="button" data-list-action="watchLater" aria-pressed="false"></button>
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
+            <button class="secondary-button watched-action" type="button" data-watched-action aria-pressed="false"><span>✓</span><span>Отметить просмотренным</span></button>
             <a class="secondary-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer">Кинопоиск ↗</a>
           </div>
           <div class="watch-hint"><span></span>Сначала попробуем открыть плеер прямо в MVPoisk. Резервный переход всегда останется доступен.</div>
@@ -651,7 +786,9 @@ function renderMovie(movie) {
   bindImageFallbacks(root);
   bindMovieActions();
   bindWatchAction();
+  bindPlayerTelemetry();
   updateListButtons();
+  updateWatchStateButtons();
 }
 
 function bindReviewToggles() {
