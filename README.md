@@ -1,21 +1,16 @@
-# MVPoisk v31
+# MVPoisk v32
 
-Static MVPoisk site for GitHub Pages / Cloudflare-backed API.
+Stable desktop/mobile UI restored from v30, with a rebuilt TV layer.
 
-## v31 TV pass
+TV fixes:
+- TV mode is no longer persisted in localStorage, so desktop cannot become stuck in TV layout;
+- no forced `width=1920` viewport;
+- TV search field never receives automatic focus;
+- compact 16:9 TV proportions and horizontal shelves;
+- movie page keeps backdrop-first TV layout without desktop changes;
+- Watch opens a fixed full-screen player shell on TV;
+- parent D-pad navigation is disabled while the player is open;
+- Android TV wrapper v3 supplies a virtual cursor for cross-origin player controls (Play / season / episode / voice);
+- Back closes the player and returns to the movie page.
 
-- fixed 1920x1080 CSS viewport for 4K Android TV WebView;
-- safe-zone layout so focus scrolling no longer shifts the whole page sideways;
-- TV home uses horizontal poster shelves and hides desktop filter controls;
-- movie page uses a backdrop-led TV layout without the desktop poster column;
-- TV-only actions: Watch, Watch later, Favorites, More;
-- Kinopoisk external button is hidden on TV;
-- More reveals Mark watched and Alternate source;
-- Watch opens the partner player as a full-screen TV surface;
-- season / episode / voice controls remain inside the partner iframe;
-- Back returns from the player to the movie page through a same-page history state;
-- D-pad navigation does not steal arrow keys after the partner iframe receives focus;
-- primary Rendex integration and lazy Kinobox reserve remain unchanged at provider level.
-
-TV URL:
-`https://mvcomplexsite.github.io/mvpoisk/?tv=1`
+The Cloudflare Worker/API integration is unchanged.

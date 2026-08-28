@@ -2,14 +2,13 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta id="viewportMeta" name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script>
     (() => {
       const q = new URLSearchParams(location.search);
-      const tv = q.get('tv') === '1' || /MVPoiskTV|Android TV|GoogleTV/i.test(navigator.userAgent || '');
-      if (!tv) return;
-      document.documentElement.classList.add('tv-mode', 'tv-viewport-ready');
-      document.querySelector('#viewportMeta')?.setAttribute('content', 'width=1920, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+      if (q.get('tv') === '1' || /MVPoiskTV\/[\d.]+|Android TV|GoogleTV/i.test(navigator.userAgent || '')) {
+        document.documentElement.classList.add('tv-mode');
+      }
     })();
   </script>
   <meta name="theme-color" content="#07070b" />
@@ -23,7 +22,7 @@
   <meta name="description" content="MVPoisk — поиск фильмов и сериалов, рейтинги, отзывы и информация о кино." />
   <title>MVPoisk — фильмы и сериалы</title>
   <link rel="preconnect" href="https://mvpoisk.cizikvpn.workers.dev" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=31" />
+  <link rel="stylesheet" href="styles.css?v=32" />
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -145,8 +144,8 @@
     <p>Информация о кино предоставляется через ПоискКино API.</p>
   </footer>
 
-  <script type="module" src="js/tv.js?v=31"></script>
-  <script type="module" src="js/common.js?v=31"></script>
-  <script type="module" src="js/app.js?v=31"></script>
+  <script type="module" src="js/tv.js?v=32"></script>
+  <script type="module" src="js/common.js?v=32"></script>
+  <script type="module" src="js/app.js?v=32"></script>
 </body>
 </html>

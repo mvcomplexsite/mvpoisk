@@ -2,14 +2,13 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta id="viewportMeta" name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script>
     (() => {
       const q = new URLSearchParams(location.search);
-      const tv = q.get('tv') === '1' || /MVPoiskTV|Android TV|GoogleTV/i.test(navigator.userAgent || '');
-      if (!tv) return;
-      document.documentElement.classList.add('tv-mode', 'tv-viewport-ready');
-      document.querySelector('#viewportMeta')?.setAttribute('content', 'width=1920, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+      if (q.get('tv') === '1' || /MVPoiskTV\/[\d.]+|Android TV|GoogleTV/i.test(navigator.userAgent || '')) {
+        document.documentElement.classList.add('tv-mode');
+      }
     })();
   </script>
   <meta name="theme-color" content="#07070b" />
@@ -22,7 +21,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
   <meta name="apple-mobile-web-app-title" content="MVPoisk" />
   <title>Моё — MVPoisk</title>
-  <link rel="stylesheet" href="styles.css?v=31" />
+  <link rel="stylesheet" href="styles.css?v=32" />
 </head>
 <body>
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -50,8 +49,8 @@
     </section>
   </main>
   <footer><a class="brand brand-small" href="./"><img class="brand-logo" src="icons/logo-mark-64.png" alt="" width="34" height="34" /><span class="brand-word"><span class="brand-mvp">MVP</span><span>oisk</span></span></a><p>Списки и история просмотра хранятся локально в этом браузере.</p></footer>
-  <script type="module" src="js/tv.js?v=31"></script>
-  <script type="module" src="js/common.js?v=31"></script>
-  <script type="module" src="js/my.js?v=31"></script>
+  <script type="module" src="js/tv.js?v=32"></script>
+  <script type="module" src="js/common.js?v=32"></script>
+  <script type="module" src="js/my.js?v=32"></script>
 </body>
 </html>
