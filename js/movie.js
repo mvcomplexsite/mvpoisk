@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=25';
-import { CONFIG, getWatchUrl } from './config.js?v=25';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=25';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=25';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=28';
+import { CONFIG, getWatchUrl } from './config.js?v=28';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=28';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=28';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -779,7 +779,7 @@ function renderMovie(movie) {
         
       </section>
       ${people.length ? `<section class="content-section"><div class="section-heading"><div><span class="eyebrow">В ролях</span><h2>Актёры</h2></div></div><div class="people-row">${people.map(personCard).join('')}</div></section>` : ''}
-      <section class="content-section" id="reviewsSection" hidden><div class="section-heading"><div><span class="eyebrow">Мнения зрителей</span><h2>Отзывы</h2></div></div><div class="reviews-grid" id="reviewsGrid"></div></section>
+      <section class="content-section" id="reviewsSection" hidden><div class="section-heading"><div><span class="eyebrow">Мнения зрителей</span><h2 id="reviewsHeading">Отзывы</h2></div></div><div class="reviews-grid" id="reviewsGrid"></div></section>
       <section class="content-section" id="similarSection" hidden><div class="section-heading"><div><span class="eyebrow">Ещё по теме</span><h2>Похожие фильмы</h2></div></div><div class="similar-row" id="similarGrid"></div></section>
     </div>`;
   bindImageFallbacks(root);
@@ -810,6 +810,8 @@ async function loadExtras(movie) {
     if (reviews.length) {
       document.querySelector('#reviewsGrid').innerHTML = reviews.map(reviewCard).join('');
       document.querySelector('#reviewsSection').hidden = false;
+      const reviewsHeading = document.querySelector('#reviewsHeading');
+      if (reviewsHeading) reviewsHeading.textContent = `Отзывы · ${reviews.length}`;
       bindReviewToggles();
     }
   }
