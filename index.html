@@ -22,7 +22,7 @@
   <meta name="description" content="MVPoisk — поиск фильмов и сериалов, рейтинги, отзывы и информация о кино." />
   <title>MVPoisk — фильмы и сериалы</title>
   <link rel="preconnect" href="https://mvpoisk.cizikvpn.workers.dev" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=33" />
+  <link rel="stylesheet" href="styles.css?v=34" />
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -51,7 +51,7 @@
       <div class="search-area">
         <form class="search-shell" id="searchForm" autocomplete="off">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65A8 8 0 1 1 3 11a8 8 0 0 1 16 0Z"/></svg>
-          <input id="searchInput" type="search" placeholder="Название фильма или сериала" aria-label="Поиск фильма" />
+          <input id="searchInput" type="search" inputmode="search" enterkeyhint="search" placeholder="Название фильма или сериала" aria-label="Поиск фильма" />
           <button type="submit">Найти</button>
         </form>
         <div class="suggestions" id="suggestions" hidden></div>
@@ -144,8 +144,8 @@
     <p>Информация о кино предоставляется через ПоискКино API.</p>
   </footer>
 
-  <script type="module" src="js/tv.js?v=33"></script>
-  <script type="module" src="js/common.js?v=33"></script>
-  <script type="module" src="js/app.js?v=33"></script>
+  <script type="module" src="js/tv.js?v=34"></script>
+  <script type="module" src="js/common.js?v=34"></script>
+  <script type="module" src="js/app.js?v=34"></script>
 </body>
 </html>

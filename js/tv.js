@@ -133,19 +133,34 @@ function openSearchKeyboard() {
   const input = document.querySelector('#searchInput');
   const form = document.querySelector('#searchForm');
   if (!(input instanceof HTMLInputElement)) return;
+
+  // Search on Android TV is a real editing state, not just a temporary focus.
+  // Keep the DOM input focused until the user submits or presses Back. Some TV
+  // WebViews briefly blur the element while the system IME window is opening;
+  // v34 restores the focus instead of treating that transient blur as "done".
+  document.body.classList.add('tv-search-editing');
   if (form instanceof HTMLElement) form.tabIndex = -1;
   input.tabIndex = 0;
+  try { window.MVPoiskAndroid?.setSearchEditing?.(true); } catch {}
   input.focus({ preventScroll: true });
-  document.body.classList.add('tv-search-editing');
+
+  const ensureInputFocus = () => {
+    if (!document.body.classList.contains('tv-search-editing')) return;
+    if (document.activeElement !== input) input.focus({ preventScroll: true });
+  };
+  requestAnimationFrame(ensureInputFocus);
+  setTimeout(ensureInputFocus, 120);
+  setTimeout(ensureInputFocus, 360);
   try { window.MVPoiskAndroid?.requestKeyboard?.(); } catch {}
 }
 
 function closeSearchEditing({ refocus = true } = {}) {
   const input = document.querySelector('#searchInput');
   const form = document.querySelector('#searchForm');
+  document.body.classList.remove('tv-search-editing');
+  try { window.MVPoiskAndroid?.setSearchEditing?.(false); } catch {}
   if (input instanceof HTMLInputElement) input.tabIndex = -1;
   if (form instanceof HTMLElement) form.tabIndex = 0;
-  document.body.classList.remove('tv-search-editing');
   if (refocus && form instanceof HTMLElement && isVisible(form)) {
     setTimeout(() => form.focus({ preventScroll: true }), 0);
   }
@@ -194,9 +209,12 @@ function setupTvMode() {
   });
 
   searchInput?.addEventListener('blur', () => {
+    // Opening Android TV's software keyboard may generate a transient blur.
+    // Do not close editing because of it; restore the input focus instead.
     setTimeout(() => {
-      if (document.activeElement !== searchInput) closeSearchEditing();
-    }, 50);
+      if (!document.body.classList.contains('tv-search-editing')) return;
+      if (document.activeElement !== searchInput) searchInput.focus({ preventScroll: true });
+    }, 140);
   });
 
   document.addEventListener('click', event => {
