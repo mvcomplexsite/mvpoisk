@@ -458,7 +458,7 @@ async function startAlternatePlayer(force = false) {
   section.hidden = false;
   panel.hidden = false;
   host.replaceChildren();
-  setAlternateStatus('Ищем запасные плееры по KinoPoisk ID…', 'loading');
+  setAlternateStatus('Ищем запасные источники…', 'loading');
   requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
 
   try {
@@ -554,7 +554,7 @@ async function startEmbeddedPlayer(force = false) {
       data-publisher-id="${esc(CONFIG.RENDEX_PUBLISHER_ID)}"
       data-type="kp"
       data-id="${esc(currentMovie.id)}"></ins>`;
-  setPlayerStatus('Ищем видео по KinoPoisk ID…', 'loading');
+  setPlayerStatus('Подключаем видео…', 'loading');
   observePlayer(host);
 
   playerTimer = setTimeout(() => {
@@ -717,7 +717,7 @@ function renderMovie(movie) {
       <div class="movie-hero-inner">
         <div class="movie-poster"><div class="poster-fallback big">MV</div>${posterUrls.length ? `<img ${imageAttrs(posterUrls, { width: 700 })} alt="Постер: ${esc(title)}" decoding="async">` : ''}</div>
         <div class="movie-main-copy">
-          <div class="movie-kicker">${movie.isSeries ? 'Сериал' : 'Фильм'} • KinoPoisk ID ${movie.id}</div>
+          <div class="movie-kicker">${movie.isSeries ? 'Сериал' : 'Фильм'}</div>
           <h1>${esc(title)}</h1>
           ${subtitle ? `<p class="movie-subtitle">${esc(subtitle)}</p>` : ''}
           <p class="movie-meta">${esc(meta)}</p>
@@ -731,10 +731,9 @@ function renderMovie(movie) {
             <button class="secondary-button list-action" type="button" data-list-action="watchLater" aria-pressed="false"></button>
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
             <button class="secondary-button watched-action" type="button" data-watched-action aria-pressed="false"><span>✓</span><span>Отметить просмотренным</span></button>
-            <a class="secondary-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer">Кинопоиск ↗</a>
+            <a class="secondary-button kp-link-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer" aria-label="Открыть карточку фильма в Кинопоиске"><span class="kp-link-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 5V19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M11 12L17 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M11 12L17 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M16.8 6L20 5.2L19.2 8.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>В Кинопоиск</span></a>
           </div>
-          <div class="watch-hint"><span></span>Сначала попробуем открыть плеер прямо в MVPoisk. Резервный переход всегда останется доступен.</div>
-        </div>
+                  </div>
       </div>
     </section>
     <section class="embedded-player-section" id="embeddedPlayerSection" hidden>
@@ -743,7 +742,7 @@ function renderMovie(movie) {
           <div>
             <span class="eyebrow">Просмотр</span>
             <h2>${esc(title)}</h2>
-            <p>${movie.isSeries ? 'Сезоны, серии и озвучки выбираются внутри плеера, если доступны. ' : ''}Плеер партнёра подключается по KinoPoisk ID ${movie.id}.</p>
+            <p>${movie.isSeries ? 'Сезоны, серии и озвучки выбираются внутри плеера, если доступны.' : 'Если видео не запустилось сразу, попробуй повторить запуск или открыть запасной источник.'}</p>
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
@@ -777,7 +776,7 @@ function renderMovie(movie) {
         <div><span>Страна</span><strong>${esc(countries || '—')}</strong></div>
         <div><span>Жанры</span><strong>${esc(genres || '—')}</strong></div>
         <div><span>Длительность</span><strong>${esc(runtime(movie.movieLength) || '—')}</strong></div>
-        <div><span>KinoPoisk ID</span><strong>${movie.id}</strong></div>
+        
       </section>
       ${people.length ? `<section class="content-section"><div class="section-heading"><div><span class="eyebrow">В ролях</span><h2>Актёры</h2></div></div><div class="people-row">${people.map(personCard).join('')}</div></section>` : ''}
       <section class="content-section" id="reviewsSection" hidden><div class="section-heading"><div><span class="eyebrow">Мнения зрителей</span><h2>Отзывы</h2></div></div><div class="reviews-grid" id="reviewsGrid"></div></section>
