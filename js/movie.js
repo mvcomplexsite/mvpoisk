@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=32';
-import { CONFIG, getWatchUrl } from './config.js?v=32';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=32';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=32';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=33';
+import { CONFIG, getWatchUrl } from './config.js?v=33';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=33';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=33';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -785,7 +785,6 @@ function renderMovie(movie) {
       </div>
     </section>
     <section class="embedded-player-section" id="embeddedPlayerSection" hidden>
-      <button type="button" class="tv-player-exit" data-player-close aria-label="Закрыть плеер">← Назад</button>
       <div class="tv-player-cursor-help" aria-hidden="true">Стрелки — курсор · OK — нажать · Back — назад</div>
       <div class="embedded-player-inner">
         <div class="embedded-player-heading">

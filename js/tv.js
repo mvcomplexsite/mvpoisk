@@ -76,7 +76,7 @@ function scrollFocusIntoView(target) {
 
 function moveInsideShelf(current, direction) {
   if (!['left', 'right'].includes(direction)) return false;
-  const shelf = current.closest('.continue-row,.movie-grid,.people-row,.similar-row,.saved-grid,.library-tabs,.movie-actions-primary');
+  const shelf = current.closest('.continue-row,.people-row,.similar-row,.library-tabs,.movie-actions-primary');
   if (!shelf) return false;
   const items = focusables(shelf);
   const index = items.indexOf(current);
@@ -131,17 +131,24 @@ function moveFocus(direction) {
 
 function openSearchKeyboard() {
   const input = document.querySelector('#searchInput');
+  const form = document.querySelector('#searchForm');
   if (!(input instanceof HTMLInputElement)) return;
+  if (form instanceof HTMLElement) form.tabIndex = -1;
   input.tabIndex = 0;
   input.focus({ preventScroll: true });
   document.body.classList.add('tv-search-editing');
   try { window.MVPoiskAndroid?.requestKeyboard?.(); } catch {}
 }
 
-function closeSearchEditing() {
+function closeSearchEditing({ refocus = true } = {}) {
   const input = document.querySelector('#searchInput');
+  const form = document.querySelector('#searchForm');
   if (input instanceof HTMLInputElement) input.tabIndex = -1;
+  if (form instanceof HTMLElement) form.tabIndex = 0;
   document.body.classList.remove('tv-search-editing');
+  if (refocus && form instanceof HTMLElement && isVisible(form)) {
+    setTimeout(() => form.focus({ preventScroll: true }), 0);
+  }
 }
 
 function setPlayerOpen(open) {
@@ -158,9 +165,16 @@ function setupTvMode() {
   // Do not focus the text field while browsing with D-pad. On Android TV focus
   // alone can summon the software keyboard, which made v31 feel broken.
   const searchInput = document.querySelector('#searchInput');
-  if (searchInput instanceof HTMLInputElement) searchInput.tabIndex = -1;
-
   const searchForm = document.querySelector('#searchForm');
+  const searchSubmit = searchForm?.querySelector('button[type="submit"]');
+  if (searchInput instanceof HTMLInputElement) searchInput.tabIndex = -1;
+  if (searchForm instanceof HTMLElement) {
+    searchForm.tabIndex = 0;
+    searchForm.setAttribute('role', 'button');
+    searchForm.setAttribute('aria-label', 'Открыть поиск');
+  }
+  if (searchSubmit instanceof HTMLElement) searchSubmit.tabIndex = -1;
+
   searchForm?.addEventListener('submit', event => {
     const input = document.querySelector('#searchInput');
     if (!(input instanceof HTMLInputElement)) return;
@@ -169,9 +183,15 @@ function setupTvMode() {
       event.stopImmediatePropagation();
       openSearchKeyboard();
     } else {
-      closeSearchEditing();
+      closeSearchEditing({ refocus: true });
     }
   }, true);
+
+  searchForm?.addEventListener('click', event => {
+    if (document.body.classList.contains('tv-search-editing')) return;
+    event.preventDefault();
+    openSearchKeyboard();
+  });
 
   searchInput?.addEventListener('blur', () => {
     setTimeout(() => {
@@ -194,10 +214,16 @@ function setupTvMode() {
     if (document.body.classList.contains('tv-player-open')) return;
 
     const active = document.activeElement;
+    if (active === searchForm && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      event.stopPropagation();
+      openSearchKeyboard();
+      return;
+    }
     if (active === searchInput) {
       if (event.key === 'Escape') {
-        closeSearchEditing();
-        document.querySelector('#searchForm button[type="submit"]')?.focus({ preventScroll: true });
+        event.preventDefault();
+        closeSearchEditing({ refocus: true });
       }
       return;
     }

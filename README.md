@@ -1,16 +1,12 @@
-# MVPoisk v32
+# MVPoisk v33
 
-Stable desktop/mobile UI restored from v30, with a rebuilt TV layer.
+TV polish on top of v32. Desktop/mobile remain unchanged.
 
-TV fixes:
-- TV mode is no longer persisted in localStorage, so desktop cannot become stuck in TV layout;
-- no forced `width=1920` viewport;
-- TV search field never receives automatic focus;
-- compact 16:9 TV proportions and horizontal shelves;
-- movie page keeps backdrop-first TV layout without desktop changes;
-- Watch opens a fixed full-screen player shell on TV;
-- parent D-pad navigation is disabled while the player is open;
-- Android TV wrapper v3 supplies a virtual cursor for cross-origin player controls (Play / season / episode / voice);
-- Back closes the player and returns to the movie page.
+TV changes:
+- the whole search bar is now a D-pad focus target; OK explicitly opens the Android TV keyboard;
+- catalogue and saved-film shelves use two visible rows instead of one extremely long strip;
+- two-row shelves use geometric D-pad navigation;
+- the on-screen Back button is removed from playback (remote Back only);
+- Android TV wrapper v4 fades the virtual player cursor after inactivity and restores it on D-pad movement.
 
-The Cloudflare Worker/API integration is unchanged.
+The Cloudflare Worker/API and partner-player integrations are unchanged.

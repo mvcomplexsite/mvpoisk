@@ -547,3 +547,43 @@ html.tv-mode .history-card{grid-template-columns:110px minmax(0,1fr);gap:16px;pa
 html.tv-mode .history-copy h3{font-size:18px}
 html.tv-mode .history-copy p{font-size:11px}
 html.tv-mode .history-actions a,html.tv-mode .history-actions button{min-height:38px;font-size:11px}
+
+/* v33 — TV polish: focusable search, compact two-row catalogue shelves, remote-only Back. */
+html.tv-mode .search-shell{cursor:pointer}
+html.tv-mode .search-shell:focus-visible{outline:3px solid #c6a3ff;outline-offset:5px;box-shadow:0 0 0 8px rgba(151,94,255,.22),0 22px 54px rgba(0,0,0,.44)}
+html.tv-mode .search-shell:focus-visible input{color:#fff}
+html.tv-mode body:not(.tv-search-editing) .search-shell input{pointer-events:none}
+html.tv-mode body.tv-search-editing .search-shell{outline:3px solid rgba(198,163,255,.76);outline-offset:5px}
+
+/* Two visible rows keep the catalogue TV-like without one extremely long strip. */
+html.tv-mode .movie-grid{
+  display:grid!important;
+  grid-template-rows:repeat(2,auto)!important;
+  grid-template-columns:none!important;
+  grid-auto-flow:column;
+  grid-auto-columns:clamp(142px,13.4vw,205px);
+  align-items:start;
+  gap:24px 18px;
+  overflow-x:auto;
+  overflow-y:visible;
+  padding:7px 6px 22px;
+  scrollbar-width:none;
+  scroll-snap-type:x proximity;
+}
+html.tv-mode .movie-card{width:100%;min-width:0;flex:none;scroll-snap-align:start}
+html.tv-mode .saved-grid:not(.history-mode){
+  display:grid!important;
+  grid-template-rows:repeat(2,auto)!important;
+  grid-auto-flow:column;
+  grid-auto-columns:clamp(142px,13.4vw,205px);
+  align-items:start;
+  gap:24px 18px;
+  overflow-x:auto;
+  overflow-y:visible;
+  padding:7px 6px 20px;
+  scrollbar-width:none;
+}
+html.tv-mode .saved-grid:not(.history-mode) .saved-card{width:100%;min-width:0;flex:none}
+
+/* Back is exclusively the physical remote Back button on TV. */
+html.tv-mode .tv-player-exit{display:none!important}
