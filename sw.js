@@ -1,8 +1,8 @@
-const CACHE = 'mvpoisk-shell-v30';
+const CACHE = 'mvpoisk-shell-v31';
 const SHELL = [
-  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=30',
-  './js/config.js?v=30', './js/api.js?v=30', './js/images.js?v=30', './js/storage.js?v=30',
-  './js/common.js?v=30', './js/app.js?v=30', './js/movie.js?v=30', './js/my.js?v=30', './js/tv.js?v=30',
+  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=31',
+  './js/config.js?v=31', './js/api.js?v=31', './js/images.js?v=31', './js/storage.js?v=31',
+  './js/common.js?v=31', './js/app.js?v=31', './js/movie.js?v=31', './js/my.js?v=31', './js/tv.js?v=31',
   './manifest.webmanifest',
   './icons/favicon-16.png', './icons/favicon-32.png', './icons/logo-mark-64.png', './icons/logo-mark-128.png',
   './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'

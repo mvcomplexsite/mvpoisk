@@ -1,12 +1,54 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=30';
-import { CONFIG, getWatchUrl } from './config.js?v=30';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=30';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=30';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=31';
+import { CONFIG, getWatchUrl } from './config.js?v=31';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=31';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=31';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
 const kpId = params.get('id');
 let currentMovie = null;
+const isTVMode = () => document.documentElement.classList.contains('tv-mode') || document.body?.dataset.tvMode === 'true';
+let tvPlayerHistoryArmed = false;
+
+function focusTvPlayerSoon() {
+  if (!isTVMode()) return;
+  document.dispatchEvent(new CustomEvent('mvpoisk:tv-player-opened'));
+  setTimeout(() => window.MVPoiskTV?.focusPlayer?.(), 1100);
+}
+
+function openTvPlayerShell(source = 'primary') {
+  if (!isTVMode()) return;
+  const section = document.querySelector('#embeddedPlayerSection');
+  if (!section) return;
+  section.hidden = false;
+  section.dataset.tvSource = source;
+  section.classList.add('is-tv-player-open');
+  document.body.classList.add('tv-player-open');
+  if (!tvPlayerHistoryArmed) {
+    history.pushState({ ...(history.state || {}), mvpoiskTvPlayer: true }, '', `${location.pathname}${location.search}#watch`);
+    tvPlayerHistoryArmed = true;
+  }
+  focusTvPlayerSoon();
+}
+
+function closeTvPlayerShell({ fromHistory = false } = {}) {
+  const section = document.querySelector('#embeddedPlayerSection');
+  const wasOpen = Boolean(section?.classList.contains('is-tv-player-open'));
+  section?.classList.remove('is-tv-player-open');
+  if (section) delete section.dataset.tvSource;
+  document.body.classList.remove('tv-player-open', 'tv-player-frame-focused');
+  stopAlternatePlayer({ hide: true });
+  stopEmbeddedPlayer({ hide: true });
+  if (tvPlayerHistoryArmed) {
+    tvPlayerHistoryArmed = false;
+    if (!fromHistory && history.state?.mvpoiskTvPlayer) history.back();
+  }
+  if (wasOpen) setTimeout(() => document.querySelector('[data-watch-action]')?.focus({ preventScroll: true }), 80);
+}
+
+window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('tv-player-open')) closeTvPlayerShell({ fromHistory: true });
+});
 
 let pendingWatchUrl = '';
 
@@ -164,12 +206,13 @@ function updateWatchStateButtons() {
     const label = watch.querySelector('span:last-child');
     if (label) label.textContent = watchButtonLabel();
   }
-  const watched = document.querySelector('[data-watched-action]');
-  if (watched && currentMovie) {
+  if (currentMovie) {
     const done = Boolean(getHistoryEntry(currentMovie.id)?.completed);
-    watched.classList.toggle('is-watched', done);
-    watched.setAttribute('aria-pressed', String(done));
-    watched.innerHTML = done ? '<span>✓</span><span>Просмотрено</span>' : '<span>✓</span><span>Отметить просмотренным</span>';
+    document.querySelectorAll('[data-watched-action]').forEach(watched => {
+      watched.classList.toggle('is-watched', done);
+      watched.setAttribute('aria-pressed', String(done));
+      watched.innerHTML = done ? '<span>✓</span><span>Просмотрено</span>' : '<span>✓</span><span>Отметить просмотренным</span>';
+    });
   }
 }
 
@@ -333,6 +376,7 @@ function markPlayerReady(iframe) {
   host?.classList.remove('player-failed');
   iframe.dataset.mvPlayerReady = '1';
   iframe.classList.add('mv-embedded-iframe');
+  iframe.tabIndex = 0;
   iframe.title = currentMovie ? `Смотреть ${currentMovie.name || currentMovie.alternativeName || 'фильм'}` : 'Плеер';
   iframe.setAttribute('allowfullscreen', '');
   if (!iframe.getAttribute('allow')) {
@@ -343,7 +387,9 @@ function markPlayerReady(iframe) {
   setPlayerStatus('Плеер подключён.', 'ready');
   iframe.addEventListener('load', () => {
     setPlayerStatus('Плеер загружен. Управление качеством, сериями и озвучкой — внутри плеера, если они доступны.', 'ready');
+    if (isTVMode()) focusTvPlayerSoon();
   }, { once: true });
+  if (isTVMode()) focusTvPlayerSoon();
 }
 
 function stopEmbeddedPlayer({ hide = true } = {}) {
@@ -436,6 +482,7 @@ function stopAlternatePlayer({ hide = true } = {}) {
 }
 
 function closePlayerSection() {
+  if (isTVMode()) return closeTvPlayerShell();
   stopAlternatePlayer({ hide: true });
   stopEmbeddedPlayer({ hide: true });
 }
@@ -457,9 +504,10 @@ async function startAlternatePlayer(force = false) {
   stopEmbeddedPlayer({ hide: false });
   section.hidden = false;
   panel.hidden = false;
+  if (isTVMode()) openTvPlayerShell('alternate');
   host.replaceChildren();
   setAlternateStatus('Ищем запасные источники…', 'loading');
-  requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  if (!isTVMode()) requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
 
   try {
     await loadKinoboxSdk();
@@ -485,6 +533,9 @@ async function startAlternatePlayer(force = false) {
           if (players.length) {
             const word = players.length === 1 ? 'источник' : players.length < 5 ? 'источника' : 'источников';
             setAlternateStatus(`Найдено ${players.length} ${word}. Переключение доступно внутри запасного плеера.`, 'ready');
+            const frame = host.querySelector('iframe');
+            if (frame) frame.tabIndex = 0;
+            if (isTVMode()) focusTvPlayerSoon();
           } else {
             const message = result?.error?.title || 'Запасные источники не найдены.';
             setAlternateStatus(message, 'error');
@@ -499,6 +550,8 @@ async function startAlternatePlayer(force = false) {
       if (iframe) {
         setAlternateStarting(false);
         setAlternateStatus('Запасной плеер подключён.', 'ready');
+        iframe.tabIndex = 0;
+        if (isTVMode()) focusTvPlayerSoon();
       } else {
         setAlternateStarting(false);
         setAlternateStatus('Запасной сервис отвечает дольше обычного. Можно повторить или вернуться к основному источнику.', 'error');
@@ -532,7 +585,8 @@ async function startEmbeddedPlayer(force = false) {
   setPlayerStarting(true);
 
   section.hidden = false;
-  requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  if (isTVMode()) openTvPlayerShell('primary');
+  else requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 
   if (!force && host.querySelector('iframe')) {
     setPlayerStarting(false);
@@ -564,7 +618,7 @@ async function startEmbeddedPlayer(force = false) {
       setPlayerStarting(false);
       host.classList.add('player-failed');
       const loader = host.querySelector('.embedded-player-loader');
-      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой просмотр у партнёра</span>';
+      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй запасной источник</span><button type="button" class="tv-player-fallback-button" data-tv-fallback-source>Другой источник</button>';
       setPlayerStatus('Встроенный плеер не ответил. Можно повторить или открыть просмотр у партнёра.', 'error');
     }
   }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
@@ -587,7 +641,7 @@ async function startEmbeddedPlayer(force = false) {
     console.warn('[MVPoisk player]', error);
     host.classList.add('player-failed');
     const loader = host.querySelector('.embedded-player-loader');
-    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>Резервный переход остаётся доступен сверху</span>';
+    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>Можно включить запасной источник</span><button type="button" class="tv-player-fallback-button" data-tv-fallback-source>Другой источник</button>';
     setPlayerStatus('Сервис встроенного плеера сейчас недоступен. Используй резервный переход.', 'error');
   }
 }
@@ -595,6 +649,19 @@ async function startEmbeddedPlayer(force = false) {
 function bindWatchAction() {
   const button = document.querySelector('[data-watch-action]');
   button?.addEventListener('click', () => startPrimaryPlayer(false));
+
+  document.querySelector('[data-watch-alternate-action]')?.addEventListener('click', () => startAlternatePlayer(false));
+  document.querySelector('[data-tv-more]')?.addEventListener('click', event => {
+    const actions = event.currentTarget.closest('.movie-actions-primary');
+    if (!actions) return;
+    const opened = actions.classList.toggle('tv-more-open');
+    event.currentTarget.setAttribute('aria-expanded', String(opened));
+    event.currentTarget.querySelector('span:last-child').textContent = opened ? 'Скрыть' : 'Ещё';
+  });
+
+  document.querySelector('#embeddedPlayerSection')?.addEventListener('click', event => {
+    if (event.target.closest('[data-tv-fallback-source]')) startAlternatePlayer(false);
+  });
 
   document.querySelector('[data-player-retry]')?.addEventListener('click', () => startPrimaryPlayer(true));
   document.querySelector('[data-player-alternate]')?.addEventListener('click', () => startAlternatePlayer(false));
@@ -689,11 +756,11 @@ function bindMovieActions() {
       updateListButtons();
     });
   });
-  document.querySelector('[data-watched-action]')?.addEventListener('click', () => {
+  document.querySelectorAll('[data-watched-action]').forEach(button => button.addEventListener('click', () => {
     if (!currentMovie) return;
     toggleWatched(currentMovie);
     updateWatchStateButtons();
-  });
+  }));
 }
 
 function renderMovie(movie) {
@@ -732,6 +799,8 @@ function renderMovie(movie) {
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
             <button class="secondary-button watched-action" type="button" data-watched-action aria-pressed="false"><span>✓</span><span>Отметить просмотренным</span></button>
             <a class="secondary-button kp-link-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer" aria-label="Открыть карточку фильма в Кинопоиске"><span class="kp-link-badge" aria-hidden="true"><img src="./icons/kinopoisk-mark.png" alt="" loading="lazy" decoding="async"></span><span class="kp-link-label">Кинопоиск</span><span class="kp-link-out" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 14L14 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8 6H14V12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a>
+            <button class="secondary-button tv-more-action" type="button" data-tv-more aria-expanded="false"><span>⋯</span><span>Ещё</span></button>
+            <button class="secondary-button tv-alt-watch-action" type="button" data-watch-alternate-action><span>↻</span><span>Другой источник</span></button>
           </div>
                   </div>
       </div>
@@ -769,6 +838,7 @@ function renderMovie(movie) {
           <div class="embedded-player-status alternate-player-status" id="alternatePlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Запасной источник ещё не запускался.</span></div>
         </div>
       </div>
+      <div class="tv-player-remote-hint" aria-hidden="true">OK — запуск / выбор · Back — назад</div>
     </section>
     <div class="movie-content">
       <section class="facts-panel">

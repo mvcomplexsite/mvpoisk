@@ -1,129 +1,21 @@
-# MVPoisk stable v25
+# MVPoisk v31
 
-Статический сайт для GitHub Pages.
+Static MVPoisk site for GitHub Pages / Cloudflare-backed API.
 
-## Что добавлено
-- Компактные отзывы с кнопкой «Читать полностью».
-- «Посмотрю позже» и «Избранное» на localStorage.
-- Отдельная страница `my.html`.
-- Локальный профиль без сервера.
-- PWA: `manifest.webmanifest`, Service Worker, установка как приложение.
-- Стабильный внешний просмотр через GGpoisk по KinoPoisk ID.
+## v31 TV pass
 
-## Важно про аккаунт
-Текущий профиль локальный: данные остаются только в конкретном браузере/устройстве. Для синхронизации между устройствами нужен backend (например Supabase/Firebase/свой API).
+- fixed 1920x1080 CSS viewport for 4K Android TV WebView;
+- safe-zone layout so focus scrolling no longer shifts the whole page sideways;
+- TV home uses horizontal poster shelves and hides desktop filter controls;
+- movie page uses a backdrop-led TV layout without the desktop poster column;
+- TV-only actions: Watch, Watch later, Favorites, More;
+- Kinopoisk external button is hidden on TV;
+- More reveals Mark watched and Alternate source;
+- Watch opens the partner player as a full-screen TV surface;
+- season / episode / voice controls remain inside the partner iframe;
+- Back returns from the player to the movie page through a same-page history state;
+- D-pad navigation does not steal arrow keys after the partner iframe receives focus;
+- primary Rendex integration and lazy Kinobox reserve remain unchanged at provider level.
 
-
-## v15
-- Убрано искусственное ограничение пагинации на 10 страниц.
-- Добавлены переходы в начало/конец и кликабельные номера страниц.
-- После смены страницы каталог прокручивается к началу выдачи.
-
-
-## v16 — pagination
-Demo/free ПоискКино API разрешает только первые 10 API-страниц. MVPoisk v16 запрашивает до 240 элементов за разрешённую API-страницу и делит их локально по 20 карточек. Поэтому каталог может листаться примерно до 120 обычных страниц без запроса запрещённой 11-й API-страницы.
-
-## Брендинг v17
-Официальный знак MVPoisk добавлен в шапку/подвал сайта, favicon, Apple Touch Icon и PWA manifest. Иконки находятся в `icons/`.
-
-
-## Предупреждение перед просмотром
-Перед переходом на партнёрский сайт MVPoisk показывает короткую плашку о возможной рекламе и предлагает подходящий вариант защиты для ПК, Android или iPhone/iPad. Плашка появляется при каждом нажатии «Смотреть», пока пользователь явно не выберет «Больше не показывать и продолжить». Выбор хранится локально в браузере.
-
-## v19 — API через Cloudflare Worker
-
-MVPoisk больше не обращается к ПоискКино API напрямую из браузера. Фронтенд использует:
-
-`https://mvpoisk.cizikvpn.workers.dev/api/v1.4`
-
-Перед загрузкой v19 на GitHub замените код существующего Cloudflare Worker на `worker/worker.js` из этого архива и нажмите Deploy.
-
-Что даёт Worker:
-- общий кэш каталога для всех посетителей;
-- карточки фильмов кэшируются до 7 дней;
-- каталог и отзывы — до 12 часов;
-- поиск — до 6 часов;
-- один популярный запрос к API может обслужить множество пользователей;
-- при наличии нескольких легально выданных токенов их можно добавить как Cloudflare secrets `KINOPOISK_API_KEY`, `KINOPOISK_API_KEY_2` ... `KINOPOISK_API_KEY_5` без изменений сайта.
-
-В браузере дополнительно хранится последняя небольшая копия данных до 7 дней. Если upstream временно недоступен, MVPoisk старается показать сохранённую версию вместо пустой страницы.
-
-Проверка Worker после Deploy:
-`https://mvpoisk.cizikvpn.workers.dev/health`
-
-## v20 — пул API-ключей
-
-Worker теперь поддерживает до 20 легально выданных ключей ПоискКино и автоматически управляет ими.
-
-Добавьте ключи в Cloudflare Worker как **Secrets**:
-
-- `KINOPOISK_API_KEY_1`
-- `KINOPOISK_API_KEY_2`
-- ...
-- `KINOPOISK_API_KEY_10`
-
-Поддерживается до `KINOPOISK_API_KEY_20`. Старый секрет `KINOPOISK_API_KEY` тоже распознаётся для совместимости.
-
-Алгоритм:
-- cache hit вообще не расходует API-ключ;
-- cache miss равномерно распределяется по пулу ключей;
-- если ключ получает rate limit / исчерпанную квоту, он временно исключается из пула;
-- если ключ невалиден, он также уходит на cooldown;
-- запрос автоматически пробует следующий доступный ключ;
-- Worker периодически возвращает исключённые ключи в работу и проверяет, сбросился ли лимит.
-
-Проверка состояния пула:
-
-`https://mvpoisk.cizikvpn.workers.dev/health`
-
-В ответе видны только номера/имена слотов и состояние (`ready`, `quota_exhausted`, `rate_limited`, `invalid_key`). Сами токены никогда не выводятся.
-
-
-## v21 — встроенный тестовый плеер
-
-Кнопка «Смотреть» сначала пробует подключить свежий Rendex/Vibix SDK с `graphicslab.io` по KinoPoisk ID и publisher ID `668474171`. Если iframe не создаётся (например, домен не разрешён у партнёра), на странице остаётся резервная кнопка перехода на GGpoisk. Сохранённый `rendex-sdk.min.js` намеренно не включён: выдаваемая версия содержит краткоживущую подписанную мета-информацию и должна загружаться свежей с сервиса.
-
-
-## v22 — стабильность встроенного просмотра
-
-Рабочая схема Rendex из v21 не менялась: свежий SDK загружается с `graphicslab.io`, publisher ID остаётся `668474171`, а фильм ищется по `data-type="kp"` и KinoPoisk ID.
-
-Изменена только оболочка MVPoisk вокруг iframe:
-- защита от повторных параллельных запусков;
-- `Закрыть` действительно удаляет iframe и останавливает скрытое видео/звук;
-- повторный запуск создаёт чистый слот и не вмешивается во внутренние API/HLS партнёра;
-- для сериалов интерфейс поясняет, что доступные сезоны/серии/озвучки выбираются внутри плеера;
-- PWA shell/cache поднят до v22.
-
-
-## v23 — запасной источник просмотра
-
-Основной Rendex/Vibix из v21–v22 не изменён и остаётся первым вариантом просмотра.
-
-Добавлена кнопка **«Другой источник»**. Только после её нажатия MVPoisk загружает `https://fbphdplay.top/kinobox.js` и ищет запасные плееры по тому же KinoPoisk ID через `baseUrl: https://fbphdplay.top/`.
-
-Особенности:
-- Kinobox не загружается при обычном просмотре и не влияет на основной Rendex;
-- при переходе на запасной источник основной iframe удаляется, чтобы не оставлять параллельный звук;
-- можно одной кнопкой вернуться к основному источнику;
-- ошибки запасного сервиса не ломают основной просмотр;
-- внутренние API, HLS/m3u8 и временные токены партнёров MVPoisk не перехватывает и не хранит.
-- PWA shell/cache поднят до v23.
-
-
-## v25 — история и «Смотреть дальше»
-
-- Первый запуск основного, запасного или внешнего просмотра создаёт/обновляет локальную запись истории.
-- На главной появляется горизонтальный блок **«Смотреть дальше»** для начатых, но не отмеченных просмотренными фильмов и сериалов.
-- На странице фильма доступна ручная отметка **«Просмотрено»**; после неё карточка исчезает из «Смотреть дальше», но остаётся в истории.
-- В `Моё → История` показываются последние просмотры, время последнего запуска, статус и действия «Продолжить / Смотреть снова».
-- Если iframe-плеер присылает стандартоподобные `postMessage`-события с временем/длительностью/серией, MVPoisk безопасно сохраняет распознанный прогресс. При подтверждённом прогрессе >=93% запись автоматически считается просмотренной.
-- Неизвестный прогресс не придумывается: если партнёрский iframe не сообщает таймкод, интерфейс показывает только честный статус «Начат».
-- Для диагностики структура сообщений плеера (без полного payload) временно сохраняется только в `sessionStorage` текущей вкладки.
-- История хранится локально в браузере; серверная синхронизация пока не используется.
-- PWA shell/cache поднят до v25.
-
-## v30 TV mode
-Open the site with `?tv=1` to enable the Android TV / Google TV interface. TV mode enlarges the interface, adds D-pad focus navigation, preserves `tv=1` across internal pages, and keeps the existing Rendex primary player and Kinobox reserve source unchanged.
-
-Production TV URL: `https://mvcomplexsite.github.io/mvpoisk/?tv=1`
+TV URL:
+`https://mvcomplexsite.github.io/mvpoisk/?tv=1`
