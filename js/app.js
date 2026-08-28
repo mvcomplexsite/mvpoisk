@@ -1,6 +1,6 @@
-import { CONFIG } from './config.js?v=18';
-import { getMovies, searchMovies } from './api.js?v=18';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=18';
+import { CONFIG } from './config.js?v=20';
+import { getMovies, searchMovies } from './api.js?v=20';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=20';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
@@ -74,10 +74,10 @@ function showNotice(text, kind = '') {
 }
 
 function friendlyError(error) {
-  if (error?.status === 401) return 'API отклонил токен. Проверь ключ ПоискКино.';
-  if (error?.status === 403) return 'API ограничил этот запрос. MVPoisk использует расширенную локальную пагинацию в пределах доступных страниц.';
-  if (error?.status === 429) return 'Лимит запросов API на сегодня исчерпан. Попробуй позже.';
-  return 'Не удалось получить данные. Проверь соединение и доступность API.';
+  if (error?.status === 401) return 'Источник данных временно недоступен. Попробуй немного позже.';
+  if (error?.status === 403 || error?.status === 429) return 'Лимит источника данных временно достигнут. Закэшированные страницы продолжат работать, новые запросы восстановятся позже.';
+  if (error?.name === 'AbortError') return 'Источник данных отвечает слишком долго. Попробуй ещё раз.';
+  return 'Не удалось получить данные. MVPoisk попробует использовать сохранённую копию, если она есть.';
 }
 
 async function loadCatalog() {
@@ -122,6 +122,7 @@ function renderResults(data) {
   state.pages = Math.max(1, Number(data?.pages || 1));
   state.page = Number(data?.page || state.page || 1);
   resultCount.textContent = data?.total ? `${Number(data.total).toLocaleString('ru-RU')} найдено${data.apiLimited ? ` • доступно ${data.pages} стр.` : ''}` : `${docs.length} на странице`;
+  if (data?._mvpoiskStale) showNotice('Показываем последнюю сохранённую версию — источник данных сейчас временно недоступен.', 'notice-soft');
   grid.innerHTML = docs.map(movieCard).join('');
   bindImageFallbacks(grid);
   if (!docs.length) showNotice('Ничего не найдено. Попробуй изменить запрос или фильтры.');
@@ -172,7 +173,7 @@ $('#searchInput').addEventListener('input', event => {
   clearTimeout(suggestTimer);
   const query = event.target.value.trim();
   const box = $('#suggestions');
-  if (query.length < 2) {
+  if (query.length < 3) {
     box.hidden = true;
     box.innerHTML = '';
     return;
@@ -193,7 +194,7 @@ $('#searchInput').addEventListener('input', event => {
     } catch {
       box.hidden = true;
     }
-  }, 380);
+  }, 700);
 });
 
 document.addEventListener('click', event => {
