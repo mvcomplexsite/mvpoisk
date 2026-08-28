@@ -238,3 +238,44 @@ img[hidden]{display:none!important}
   .kp-link-label{font-size:12px}
   .facts-panel{grid-template-columns:1fr}
 }
+
+
+/* v29 — mobile movie layout fix */
+.movie-hero-inner,.movie-main-copy,.movie-actions-primary,.movie-actions-primary>*{min-width:0}
+.movie-main-copy h1,.movie-description,.kp-link-label,.movie-actions-primary span:last-child{overflow-wrap:anywhere}
+.movie-actions-primary .secondary-button,.movie-actions-primary .watch-button{max-width:100%}
+
+@media(max-width:700px){
+  .movie-hero-inner{width:min(100% - 24px,1180px);grid-template-columns:116px minmax(0,1fr);gap:16px}
+  .movie-poster{border-radius:20px}
+  .movie-main-copy h1{font-size:clamp(31px,9.2vw,42px);line-height:1.02;letter-spacing:-1.8px}
+  .movie-description{max-width:none;font-size:13px;line-height:1.66}
+  .movie-ratings{gap:8px;flex-wrap:wrap}
+  .movie-ratings>div{min-width:0}
+  .movie-actions-primary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:stretch}
+  .movie-actions-primary .watch-button,.movie-actions-primary .watched-action{grid-column:1/-1}
+  .movie-actions-primary .secondary-button,.movie-actions-primary .watch-button{width:100%;padding:0 12px}
+  .movie-actions-primary .secondary-button{font-size:12px}
+  .movie-actions-primary .list-action,.movie-actions-primary .favorite-action,.movie-actions-primary .kp-link-button{justify-content:center}
+  .movie-actions-primary .list-action span:last-child,.movie-actions-primary .favorite-action span:last-child,.movie-actions-primary .watched-action span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kp-link-button{gap:8px}
+  .kp-link-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+
+@media(max-width:430px){
+  .movie-hero{padding:100px 0 38px}
+  .movie-hero-inner{grid-template-columns:104px minmax(0,1fr);gap:14px}
+  .movie-main-copy h1{font-size:clamp(28px,10vw,36px);letter-spacing:-1.4px}
+  .movie-subtitle{font-size:12px}
+  .movie-meta{font-size:10px;line-height:1.45}
+  .movie-ratings{margin-bottom:16px}
+  .movie-ratings>div{padding:7px 9px}
+  .rating-box{min-width:42px;height:34px;font-size:14px}
+  .movie-description{font-size:12.5px;line-height:1.62}
+  .movie-actions-primary{grid-template-columns:1fr}
+  .movie-actions-primary .watch-button,.movie-actions-primary .watched-action{grid-column:auto}
+  .movie-actions-primary .secondary-button,.movie-actions-primary .watch-button{min-height:46px;font-size:12px}
+  .movie-actions-primary .secondary-button{justify-content:flex-start}
+  .movie-actions-primary .list-action span:last-child,.movie-actions-primary .favorite-action span:last-child,.kp-link-label,.movie-actions-primary .watched-action span:last-child{overflow:visible;text-overflow:clip;white-space:normal}
+  .kp-link-button{justify-content:flex-start}
+}
