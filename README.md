@@ -122,3 +122,8 @@ Worker теперь поддерживает до 20 легально выдан
 - Для диагностики структура сообщений плеера (без полного payload) временно сохраняется только в `sessionStorage` текущей вкладки.
 - История хранится локально в браузере; серверная синхронизация пока не используется.
 - PWA shell/cache поднят до v25.
+
+## v30 TV mode
+Open the site with `?tv=1` to enable the Android TV / Google TV interface. TV mode enlarges the interface, adds D-pad focus navigation, preserves `tv=1` across internal pages, and keeps the existing Rendex primary player and Kinobox reserve source unchanged.
+
+Production TV URL: `https://mvcomplexsite.github.io/mvpoisk/?tv=1`

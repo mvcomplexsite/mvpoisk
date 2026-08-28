@@ -279,3 +279,113 @@ img[hidden]{display:none!important}
   .movie-actions-primary .list-action span:last-child,.movie-actions-primary .favorite-action span:last-child,.kp-link-label,.movie-actions-primary .watched-action span:last-child{overflow:visible;text-overflow:clip;white-space:normal}
   .kp-link-button{justify-content:flex-start}
 }
+
+/* v30 — Android TV / big-screen mode. Enable with ?tv=1. */
+html.tv-mode{font-size:18px;scroll-behavior:smooth}
+html.tv-mode body{background:#07070b;overscroll-behavior:none}
+html.tv-mode *:focus{outline:none}
+html.tv-mode :is(a,button,input,select,[tabindex]):focus-visible{position:relative;z-index:20;outline:4px solid rgba(190,151,255,.98);outline-offset:5px;box-shadow:0 0 0 8px rgba(142,86,255,.22),0 22px 64px rgba(0,0,0,.46)}
+html.tv-mode .site-header{width:min(1640px,calc(100% - 96px));height:104px}
+html.tv-mode .brand-logo{width:46px;height:46px;border-radius:13px}
+html.tv-mode .brand{font-size:29px;gap:13px}
+html.tv-mode .nav{gap:42px}
+html.tv-mode .nav a,html.tv-mode .nav-link{font-size:18px;padding:12px 4px;border-radius:8px}
+html.tv-mode .nav-profile,html.tv-mode .nav-install{display:none!important}
+html.tv-mode .hero{width:min(1280px,calc(100% - 96px));margin:72px auto 86px;text-align:left}
+html.tv-mode .hero-badge{font-size:14px}
+html.tv-mode .hero h1{max-width:1120px;margin:20px 0 20px;font-size:clamp(62px,5.3vw,104px);letter-spacing:-5px}
+html.tv-mode .hero>p{max-width:900px;margin:0 0 32px;font-size:22px}
+html.tv-mode .search-shell{max-width:1040px;margin:0;padding:14px 14px 14px 24px;border-radius:23px;grid-template-columns:34px 1fr auto}
+html.tv-mode .search-shell svg{width:30px}
+html.tv-mode .search-shell input{height:64px;font-size:22px}
+html.tv-mode .search-shell>button{height:62px;padding:0 34px;border-radius:16px;font-size:18px}
+html.tv-mode .suggestions{max-width:1040px;border-radius:20px;max-height:500px}
+html.tv-mode .suggestion-row{gap:16px;padding:13px;border-radius:15px}
+html.tv-mode .suggestion-row img,html.tv-mode .suggestion-fallback{width:56px;height:78px;border-radius:10px}
+html.tv-mode .suggestion-row strong{font-size:18px}
+html.tv-mode .suggestion-row small{font-size:14px}
+html.tv-mode .continue-section,html.tv-mode .catalog,html.tv-mode .movie-content{width:min(1640px,calc(100% - 96px))}
+html.tv-mode .continue-section{margin:-18px auto 76px}
+html.tv-mode .section-heading{margin-bottom:28px}
+html.tv-mode .eyebrow{font-size:13px}
+html.tv-mode .section-heading h2{font-size:40px;letter-spacing:-1.6px}
+html.tv-mode .continue-all,html.tv-mode .result-count{font-size:16px}
+html.tv-mode .continue-row{gap:22px;padding:8px 8px 18px}
+html.tv-mode .continue-card{flex-basis:330px}
+html.tv-mode .continue-art{border-radius:22px}
+html.tv-mode .continue-play{width:54px;height:54px;left:18px;bottom:17px;font-size:18px}
+html.tv-mode .continue-copy strong{font-size:18px}
+html.tv-mode .continue-copy span{font-size:14px}
+html.tv-mode .continue-dismiss{width:38px;height:38px;top:12px;right:12px;font-size:24px}
+html.tv-mode .filters{grid-template-columns:1.1fr 1.2fr 1fr 1fr auto auto;gap:14px;padding:18px;border-radius:24px;margin-bottom:34px}
+html.tv-mode .filters label span{font-size:12px}
+html.tv-mode .filters select,html.tv-mode .filters input,html.tv-mode .filter-submit,html.tv-mode .filter-reset{height:56px;border-radius:14px;font-size:17px}
+html.tv-mode .movie-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:42px 22px}
+html.tv-mode .poster-wrap{border-radius:22px}
+html.tv-mode .rating-pill,html.tv-mode .type-pill{top:14px;padding:8px 10px;border-radius:11px;font-size:14px}
+html.tv-mode .rating-pill{left:14px}
+html.tv-mode .type-pill{right:14px}
+html.tv-mode .card-copy{padding-top:15px}
+html.tv-mode .card-copy h3{font-size:19px;margin-bottom:7px}
+html.tv-mode .card-copy p{font-size:14px}
+html.tv-mode .pagination{margin:60px 0 20px;gap:14px}
+html.tv-mode .pagination button{min-height:54px;padding:0 20px;font-size:16px;border-radius:14px}
+html.tv-mode footer{width:min(1640px,calc(100% - 96px));margin-top:120px;font-size:14px}
+
+/* TV movie page */
+html.tv-mode .movie-header{width:min(1640px,calc(100% - 96px))}
+html.tv-mode .movie-hero{min-height:900px;padding:148px 0 88px}
+html.tv-mode .movie-hero-inner{width:min(1640px,calc(100% - 96px));grid-template-columns:360px minmax(0,920px);gap:74px;align-items:center}
+html.tv-mode .movie-poster{border-radius:30px}
+html.tv-mode .movie-kicker{font-size:16px;margin-bottom:20px}
+html.tv-mode .movie-main-copy h1{font-size:clamp(66px,5vw,96px);line-height:.96;letter-spacing:-4.5px}
+html.tv-mode .movie-subtitle{font-size:25px}
+html.tv-mode .movie-meta{font-size:18px}
+html.tv-mode .movie-ratings>div{padding:12px 14px}
+html.tv-mode .rating-box{min-width:64px;height:50px;font-size:20px}
+html.tv-mode .movie-ratings small{font-size:15px}
+html.tv-mode .movie-description{font-size:20px;line-height:1.72;max-width:900px}
+html.tv-mode .movie-actions{gap:15px;margin-top:34px;flex-wrap:wrap}
+html.tv-mode .watch-button,html.tv-mode .secondary-button{min-height:62px;border-radius:16px;padding:0 22px;font-size:17px}
+html.tv-mode .movie-actions-primary .watch-button{min-width:240px}
+html.tv-mode .kp-link-badge{width:34px;height:34px}
+html.tv-mode .kp-link-label{font-size:16px}
+html.tv-mode .facts-panel{gap:14px}
+html.tv-mode .facts-panel>div{min-height:120px;padding:24px 26px;border-radius:21px}
+html.tv-mode .facts-panel span{font-size:12px}
+html.tv-mode .facts-panel strong{font-size:17px}
+html.tv-mode .content-section{margin-bottom:92px}
+html.tv-mode .people-row,html.tv-mode .similar-row{grid-template-columns:repeat(7,1fr);gap:20px}
+html.tv-mode .person-card strong,html.tv-mode .similar-card strong{font-size:16px}
+html.tv-mode .person-card small,html.tv-mode .similar-card small{font-size:13px}
+html.tv-mode .review-card{padding:30px;border-radius:24px}
+html.tv-mode .review-head strong{font-size:17px}
+html.tv-mode .review-head span{font-size:13px;min-height:30px}
+html.tv-mode .review-card h3{font-size:21px}
+html.tv-mode .review-copy{font-size:17px;line-height:1.72}
+html.tv-mode .review-toggle{min-height:48px;padding:0 18px;font-size:15px}
+html.tv-mode .embedded-player-section{width:min(1640px,calc(100% - 96px));margin:36px auto 90px}
+html.tv-mode .embedded-player-inner{padding:24px;border-radius:28px}
+html.tv-mode .embedded-player-heading h2{font-size:34px}
+html.tv-mode .embedded-player-heading p{font-size:15px}
+html.tv-mode .player-mini-button{min-height:48px;padding:0 17px;font-size:14px;border-radius:12px}
+html.tv-mode .embedded-player-stage{border-radius:22px;min-height:520px}
+html.tv-mode .embedded-player-status{font-size:14px}
+
+/* TV library */
+html.tv-mode .library-page{width:min(1640px,calc(100% - 96px));padding-top:138px}
+html.tv-mode .library-title-row h1{font-size:96px}
+html.tv-mode .library-title-row p{font-size:18px}
+html.tv-mode .profile-pill{display:none}
+html.tv-mode .library-tabs{gap:14px;margin-top:40px;padding-bottom:16px}
+html.tv-mode .library-tab{min-height:52px;padding:0 18px;border-radius:14px;font-size:16px}
+html.tv-mode .library-tab span{min-width:27px;height:27px;font-size:13px}
+html.tv-mode .saved-grid:not(.history-mode){grid-template-columns:repeat(6,minmax(0,1fr));gap:42px 22px}
+html.tv-mode .saved-remove{height:46px;font-size:14px}
+html.tv-mode .history-card{grid-template-columns:160px minmax(0,1fr);gap:26px;padding:16px;border-radius:24px}
+html.tv-mode .history-copy h3{font-size:28px}
+html.tv-mode .history-copy p{font-size:16px}
+html.tv-mode .history-topline span,html.tv-mode .history-topline time{font-size:13px}
+html.tv-mode .history-actions a,html.tv-mode .history-actions button{min-height:46px;padding:0 16px;font-size:14px;border-radius:12px}
+
+@media(min-width:1800px){html.tv-mode .movie-grid,html.tv-mode .saved-grid:not(.history-mode){grid-template-columns:repeat(7,minmax(0,1fr))}}
