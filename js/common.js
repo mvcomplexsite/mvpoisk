@@ -1,4 +1,4 @@
-import { getProfile, saveProfile, clearProfile, counts } from './storage.js?v=20';
+import { getProfile, saveProfile, clearProfile, counts } from './storage.js?v=21';
 
 function updateHeaderState() {
   const total = counts().watchLater + counts().favorites;
@@ -133,7 +133,7 @@ function setupInstall() {
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { await navigator.serviceWorker.register('./sw.js?v=20'); } catch (error) { console.warn('PWA service worker:', error); }
+  try { await navigator.serviceWorker.register('./sw.js?v=21'); } catch (error) { console.warn('PWA service worker:', error); }
 }
 
 document.querySelectorAll('[data-profile-open]').forEach(node => node.addEventListener('click', openProfileModal));

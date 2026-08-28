@@ -5,6 +5,9 @@
 export const CONFIG = Object.freeze({
   API_BASE: 'https://mvpoisk.cizikvpn.workers.dev/api/v1.4',
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
+  RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
+  RENDEX_PUBLISHER_ID: '668474171',
+  PLAYER_LOAD_TIMEOUT_MS: 15000,
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
   PAGE_SIZE: 20,
   // Demo/free API allows only the first 10 upstream pages. Request a larger

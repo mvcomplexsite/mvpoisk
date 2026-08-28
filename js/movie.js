@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=20';
-import { getWatchUrl } from './config.js?v=20';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=20';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=20';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=21';
+import { CONFIG, getWatchUrl } from './config.js?v=21';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=21';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=21';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -142,13 +142,156 @@ function openWatchNotice(url) {
   requestAnimationFrame(() => modal.querySelector('[data-watch-continue]')?.focus());
 }
 
+let playerObserver = null;
+let playerTimer = null;
+let playerScriptPromise = null;
+
+function playerElements() {
+  return {
+    section: document.querySelector('#embeddedPlayerSection'),
+    host: document.querySelector('#embeddedPlayerHost'),
+    status: document.querySelector('#embeddedPlayerStatus'),
+  };
+}
+
+function setPlayerStatus(message, state = 'loading') {
+  const { status } = playerElements();
+  if (!status) return;
+  status.dataset.state = state;
+  status.innerHTML = state === 'loading'
+    ? `<span class="player-status-dot"></span><span>${esc(message)}</span>`
+    : state === 'ready'
+      ? `<span class="player-status-ok">✓</span><span>${esc(message)}</span>`
+      : `<span class="player-status-error">!</span><span>${esc(message)}</span>`;
+}
+
+function loadRendexSdk() {
+  if (playerScriptPromise) return playerScriptPromise;
+  playerScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.dataset.mvRendexSdk = '1';
+    // The SDK response contains short-lived signed metadata, so force a fresh copy
+    // for each page session rather than relying on a potentially expired browser cache.
+    const separator = CONFIG.RENDEX_SDK_URL.includes('?') ? '&' : '?';
+    script.src = `${CONFIG.RENDEX_SDK_URL}${separator}mvpoisk=${Date.now()}`;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      playerScriptPromise = null;
+      script.remove();
+      reject(new Error('Rendex SDK blocked or unavailable'));
+    };
+    document.head.appendChild(script);
+  });
+  return playerScriptPromise;
+}
+
+function markPlayerReady(iframe) {
+  if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
+  const { host } = playerElements();
+  host?.classList.remove('player-failed');
+  iframe.dataset.mvPlayerReady = '1';
+  iframe.classList.add('mv-embedded-iframe');
+  iframe.title = currentMovie ? `Смотреть ${currentMovie.name || currentMovie.alternativeName || 'фильм'}` : 'Плеер';
+  iframe.setAttribute('allowfullscreen', '');
+  if (!iframe.getAttribute('allow')) {
+    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
+  }
+  clearTimeout(playerTimer);
+  setPlayerStatus('Плеер подключён. Если видео не запускается, попробуй резервный переход.', 'ready');
+  iframe.addEventListener('load', () => {
+    setPlayerStatus('Плеер загружен.', 'ready');
+  }, { once: true });
+}
+
+function observePlayer(host) {
+  playerObserver?.disconnect();
+  const scan = () => {
+    const iframe = host.querySelector('iframe');
+    if (iframe) markPlayerReady(iframe);
+    return iframe;
+  };
+  if (scan()) return;
+  playerObserver = new MutationObserver(() => scan());
+  playerObserver.observe(host, { childList: true, subtree: true });
+}
+
+async function startEmbeddedPlayer(force = false) {
+  if (!currentMovie) return;
+  const { section, host } = playerElements();
+  if (!section || !host) return;
+
+  section.hidden = false;
+  requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+  if (!force && host.querySelector('iframe')) {
+    setPlayerStatus('Плеер уже подключён.', 'ready');
+    return;
+  }
+
+  playerObserver?.disconnect();
+  clearTimeout(playerTimer);
+  host.classList.remove('player-failed');
+  host.dataset.playerAttempt = String((Number(host.dataset.playerAttempt || 0) + 1));
+  host.innerHTML = `
+    <div class="embedded-player-loader" aria-hidden="true">
+      <div class="spinner"></div>
+      <strong>Подключаем плеер…</strong>
+      <span>Обычно это занимает несколько секунд</span>
+    </div>
+    <ins class="mv-rendex-slot"
+      data-publisher-id="${esc(CONFIG.RENDEX_PUBLISHER_ID)}"
+      data-type="kp"
+      data-id="${esc(currentMovie.id)}"></ins>`;
+  setPlayerStatus('Ищем видео по KinoPoisk ID…', 'loading');
+  observePlayer(host);
+
+  playerTimer = setTimeout(() => {
+    if (!host.querySelector('iframe')) {
+      playerObserver?.disconnect();
+      host.classList.add('player-failed');
+      const loader = host.querySelector('.embedded-player-loader');
+      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой просмотр у партнёра</span>';
+      setPlayerStatus('Встроенный плеер не ответил. Можно повторить или открыть просмотр у партнёра.', 'error');
+    }
+  }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
+
+  try {
+    await loadRendexSdk();
+    // The SDK normally scans existing <ins> elements and also installs a
+    // MutationObserver. Re-inserting the slot after load nudges a retry when
+    // the script was already present from an earlier attempt.
+    if (!host.querySelector('iframe') && force) {
+      const slot = host.querySelector('.mv-rendex-slot');
+      if (slot) slot.replaceWith(slot.cloneNode(true));
+    }
+  } catch (error) {
+    clearTimeout(playerTimer);
+    playerObserver?.disconnect();
+    console.warn('[MVPoisk player]', error);
+    host.classList.add('player-failed');
+    const loader = host.querySelector('.embedded-player-loader');
+    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>Резервный переход остаётся доступен сверху</span>';
+    setPlayerStatus('Сервис встроенного плеера сейчас недоступен. Используй резервный переход.', 'error');
+  }
+}
+
 function bindWatchAction() {
   const button = document.querySelector('[data-watch-action]');
-  if (!button) return;
-  button.addEventListener('click', event => {
-    if (isWatchNoticeDismissed()) return;
-    event.preventDefault();
-    openWatchNotice(button.href);
+  button?.addEventListener('click', () => startEmbeddedPlayer(false));
+
+  document.querySelector('[data-player-retry]')?.addEventListener('click', () => startEmbeddedPlayer(true));
+  document.querySelector('[data-player-close]')?.addEventListener('click', () => {
+    const { section } = playerElements();
+    if (section) section.hidden = true;
+  });
+
+  document.querySelectorAll('[data-partner-watch]').forEach(link => {
+    link.addEventListener('click', event => {
+      if (isWatchNoticeDismissed()) return;
+      event.preventDefault();
+      openWatchNotice(link.href);
+    });
   });
 }
 
@@ -259,13 +402,31 @@ function renderMovie(movie) {
           </div>
           <p class="movie-description">${esc(description)}</p>
           <div class="movie-actions movie-actions-primary">
-            <a class="watch-button" data-watch-action href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer"><span class="watch-play">▶</span><span>Смотреть</span></a>
+            <button class="watch-button" data-watch-action type="button"><span class="watch-play">▶</span><span>Смотреть</span></button>
             <button class="secondary-button list-action" type="button" data-list-action="watchLater" aria-pressed="false"></button>
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
             <a class="secondary-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer">Кинопоиск ↗</a>
           </div>
-          <div class="watch-hint"><span></span>Просмотр откроется на партнёрском сайте GGpoisk</div>
+          <div class="watch-hint"><span></span>Сначала попробуем открыть плеер прямо в MVPoisk. Резервный переход всегда останется доступен.</div>
         </div>
+      </div>
+    </section>
+    <section class="embedded-player-section" id="embeddedPlayerSection" hidden>
+      <div class="embedded-player-inner">
+        <div class="embedded-player-heading">
+          <div>
+            <span class="eyebrow">Просмотр</span>
+            <h2>${esc(title)}</h2>
+            <p>Плеер партнёра подключается по KinoPoisk ID ${movie.id}.</p>
+          </div>
+          <div class="embedded-player-actions">
+            <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
+            <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть у партнёра ↗</a>
+            <button type="button" class="player-mini-button" data-player-close>Скрыть</button>
+          </div>
+        </div>
+        <div class="embedded-player-stage" id="embeddedPlayerHost"></div>
+        <div class="embedded-player-status" id="embeddedPlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Плеер ещё не запускался.</span></div>
       </div>
     </section>
     <div class="movie-content">
