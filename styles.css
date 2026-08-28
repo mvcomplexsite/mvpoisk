@@ -100,3 +100,6 @@ img[hidden]{display:none!important}
 @media(max-width:760px){.embedded-player-section{width:min(100% - 20px,1180px);margin:18px auto 48px}.embedded-player-inner{padding:10px;border-radius:18px}.embedded-player-heading{align-items:flex-start;flex-direction:column;padding:8px 5px 13px;gap:13px}.embedded-player-heading h2{font-size:20px}.embedded-player-actions{width:100%;justify-content:flex-start}.player-mini-button{flex:1}.embedded-player-stage{min-height:0;border-radius:13px}.embedded-player-status{padding:11px 4px 3px}}
 
 .player-fail-mark{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:rgba(236,95,95,.12);color:#ef8f8f;font-size:16px;font-weight:900}.embedded-player-stage.player-failed{background:radial-gradient(circle at 50% 45%,rgba(236,95,95,.05),transparent 36%),#050507}
+
+/* v22 player stability */
+.watch-button:disabled{cursor:wait;opacity:.86;transform:none!important;filter:none!important}.watch-button.is-loading .watch-play{animation:playerPulse 1s ease-in-out infinite}.embedded-player-heading p{max-width:620px;line-height:1.5}

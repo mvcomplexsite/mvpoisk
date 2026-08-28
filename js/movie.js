@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=21';
-import { CONFIG, getWatchUrl } from './config.js?v=21';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=21';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=21';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=22';
+import { CONFIG, getWatchUrl } from './config.js?v=22';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=22';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=22';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -145,6 +145,8 @@ function openWatchNotice(url) {
 let playerObserver = null;
 let playerTimer = null;
 let playerScriptPromise = null;
+let playerAttemptId = 0;
+let playerStarting = false;
 
 function playerElements() {
   return {
@@ -186,6 +188,16 @@ function loadRendexSdk() {
   return playerScriptPromise;
 }
 
+function setPlayerStarting(value) {
+  playerStarting = value;
+  const button = document.querySelector('[data-watch-action]');
+  if (!button) return;
+  button.disabled = value;
+  button.classList.toggle('is-loading', value);
+  const label = button.querySelector('span:last-child');
+  if (label) label.textContent = value ? 'Подключаем…' : 'Смотреть';
+}
+
 function markPlayerReady(iframe) {
   if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
   const { host } = playerElements();
@@ -198,10 +210,26 @@ function markPlayerReady(iframe) {
     iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
   }
   clearTimeout(playerTimer);
-  setPlayerStatus('Плеер подключён. Если видео не запускается, попробуй резервный переход.', 'ready');
+  setPlayerStarting(false);
+  setPlayerStatus('Плеер подключён.', 'ready');
   iframe.addEventListener('load', () => {
-    setPlayerStatus('Плеер загружен.', 'ready');
+    setPlayerStatus('Плеер загружен. Управление качеством, сериями и озвучкой — внутри плеера, если они доступны.', 'ready');
   }, { once: true });
+}
+
+function stopEmbeddedPlayer({ hide = true } = {}) {
+  playerAttemptId += 1;
+  playerObserver?.disconnect();
+  clearTimeout(playerTimer);
+  const { section, host } = playerElements();
+  if (host) {
+    // Removing the cross-origin iframe is the reliable way to stop hidden audio/video.
+    host.replaceChildren();
+    host.classList.remove('player-failed');
+  }
+  setPlayerStarting(false);
+  setPlayerStatus('Плеер остановлен.', 'ready');
+  if (section && hide) section.hidden = true;
 }
 
 function observePlayer(host) {
@@ -221,10 +249,15 @@ async function startEmbeddedPlayer(force = false) {
   const { section, host } = playerElements();
   if (!section || !host) return;
 
+  if (playerStarting && !force) return;
+  const attemptId = ++playerAttemptId;
+  setPlayerStarting(true);
+
   section.hidden = false;
   requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 
   if (!force && host.querySelector('iframe')) {
+    setPlayerStarting(false);
     setPlayerStatus('Плеер уже подключён.', 'ready');
     return;
   }
@@ -247,8 +280,10 @@ async function startEmbeddedPlayer(force = false) {
   observePlayer(host);
 
   playerTimer = setTimeout(() => {
+    if (attemptId !== playerAttemptId) return;
     if (!host.querySelector('iframe')) {
       playerObserver?.disconnect();
+      setPlayerStarting(false);
       host.classList.add('player-failed');
       const loader = host.querySelector('.embedded-player-loader');
       if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой просмотр у партнёра</span>';
@@ -258,16 +293,19 @@ async function startEmbeddedPlayer(force = false) {
 
   try {
     await loadRendexSdk();
-    // The SDK normally scans existing <ins> elements and also installs a
-    // MutationObserver. Re-inserting the slot after load nudges a retry when
-    // the script was already present from an earlier attempt.
+    if (attemptId !== playerAttemptId) return;
+    // The SDK normally scans existing <ins> elements and also watches newly added slots.
+    // On a manual retry, replacing the slot triggers a clean rescan without touching
+    // the partner's internal API/HLS logic.
     if (!host.querySelector('iframe') && force) {
       const slot = host.querySelector('.mv-rendex-slot');
       if (slot) slot.replaceWith(slot.cloneNode(true));
     }
   } catch (error) {
+    if (attemptId !== playerAttemptId) return;
     clearTimeout(playerTimer);
     playerObserver?.disconnect();
+    setPlayerStarting(false);
     console.warn('[MVPoisk player]', error);
     host.classList.add('player-failed');
     const loader = host.querySelector('.embedded-player-loader');
@@ -281,10 +319,7 @@ function bindWatchAction() {
   button?.addEventListener('click', () => startEmbeddedPlayer(false));
 
   document.querySelector('[data-player-retry]')?.addEventListener('click', () => startEmbeddedPlayer(true));
-  document.querySelector('[data-player-close]')?.addEventListener('click', () => {
-    const { section } = playerElements();
-    if (section) section.hidden = true;
-  });
+  document.querySelector('[data-player-close]')?.addEventListener('click', () => stopEmbeddedPlayer({ hide: true }));
 
   document.querySelectorAll('[data-partner-watch]').forEach(link => {
     link.addEventListener('click', event => {
@@ -417,12 +452,12 @@ function renderMovie(movie) {
           <div>
             <span class="eyebrow">Просмотр</span>
             <h2>${esc(title)}</h2>
-            <p>Плеер партнёра подключается по KinoPoisk ID ${movie.id}.</p>
+            <p>${movie.isSeries ? 'Сезоны, серии и озвучки выбираются внутри плеера, если доступны. ' : ''}Плеер партнёра подключается по KinoPoisk ID ${movie.id}.</p>
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
             <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть у партнёра ↗</a>
-            <button type="button" class="player-mini-button" data-player-close>Скрыть</button>
+            <button type="button" class="player-mini-button" data-player-close>Закрыть</button>
           </div>
         </div>
         <div class="embedded-player-stage" id="embeddedPlayerHost"></div>
