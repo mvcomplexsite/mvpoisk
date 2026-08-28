@@ -1,5 +1,5 @@
-import { getList, removeFromList, getProfile, counts, getHistory, removeFromHistory, setWatched } from './storage.js?v=24';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=24';
+import { getList, removeFromList, getProfile, counts, getHistory, removeFromHistory, setWatched } from './storage.js?v=25';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=25';
 
 const grid = document.querySelector('#savedGrid');
 const empty = document.querySelector('#libraryEmpty');
