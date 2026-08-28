@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=22';
-import { CONFIG, getWatchUrl } from './config.js?v=22';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=22';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=22';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=23';
+import { CONFIG, getWatchUrl } from './config.js?v=23';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=23';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice } from './storage.js?v=23';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -148,6 +148,14 @@ let playerScriptPromise = null;
 let playerAttemptId = 0;
 let playerStarting = false;
 
+// Reserve Kinobox path. Kept completely separate from the working Rendex path:
+// it is not downloaded or initialized until the user asks for another source.
+let alternateScriptPromise = null;
+let alternateInstance = null;
+let alternateTimer = null;
+let alternateAttemptId = 0;
+let alternateStarting = false;
+
 function playerElements() {
   return {
     section: document.querySelector('#embeddedPlayerSection'),
@@ -244,6 +252,151 @@ function observePlayer(host) {
   playerObserver.observe(host, { childList: true, subtree: true });
 }
 
+function alternateElements() {
+  return {
+    panel: document.querySelector('#alternatePlayerPanel'),
+    host: document.querySelector('#alternatePlayerHost'),
+    status: document.querySelector('#alternatePlayerStatus'),
+    button: document.querySelector('[data-player-alternate]'),
+  };
+}
+
+function setAlternateStatus(message, state = 'loading') {
+  const { status } = alternateElements();
+  if (!status) return;
+  status.dataset.state = state;
+  status.innerHTML = state === 'loading'
+    ? `<span class="player-status-dot"></span><span>${esc(message)}</span>`
+    : state === 'ready'
+      ? `<span class="player-status-ok">✓</span><span>${esc(message)}</span>`
+      : `<span class="player-status-error">!</span><span>${esc(message)}</span>`;
+}
+
+function setAlternateStarting(value) {
+  alternateStarting = value;
+  const { button } = alternateElements();
+  if (!button) return;
+  button.disabled = value;
+  button.classList.toggle('is-loading', value);
+  button.textContent = value ? 'Ищем источники…' : 'Другой источник';
+}
+
+function loadKinoboxSdk() {
+  if (typeof window.kinobox === 'function') return Promise.resolve();
+  if (alternateScriptPromise) return alternateScriptPromise;
+  alternateScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.dataset.mvKinoboxSdk = '1';
+    script.src = CONFIG.KINOBOX_SDK_URL;
+    script.onload = () => typeof window.kinobox === 'function'
+      ? resolve()
+      : reject(new Error('Kinobox loaded without global function'));
+    script.onerror = () => {
+      alternateScriptPromise = null;
+      script.remove();
+      reject(new Error('Kinobox SDK blocked or unavailable'));
+    };
+    document.head.appendChild(script);
+  });
+  return alternateScriptPromise;
+}
+
+function stopAlternatePlayer({ hide = true } = {}) {
+  alternateAttemptId += 1;
+  clearTimeout(alternateTimer);
+  alternateTimer = null;
+  try { alternateInstance?.$destroy?.(); } catch {}
+  alternateInstance = null;
+  const { panel, host } = alternateElements();
+  host?.replaceChildren();
+  if (panel && hide) panel.hidden = true;
+  setAlternateStarting(false);
+}
+
+function closePlayerSection() {
+  stopAlternatePlayer({ hide: true });
+  stopEmbeddedPlayer({ hide: true });
+}
+
+async function startAlternatePlayer(force = false) {
+  if (!currentMovie) return;
+  const { section } = playerElements();
+  const { panel, host } = alternateElements();
+  if (!section || !panel || !host) return;
+  if (alternateStarting && !force) return;
+
+  const attemptId = ++alternateAttemptId;
+  setAlternateStarting(true);
+
+  // Only one playback iframe should stay alive at a time. Removing the Rendex
+  // iframe stops its audio, but does not change how Rendex itself is integrated.
+  stopEmbeddedPlayer({ hide: false });
+  section.hidden = false;
+  panel.hidden = false;
+  host.replaceChildren();
+  setAlternateStatus('Ищем запасные плееры по KinoPoisk ID…', 'loading');
+  requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+
+  try {
+    await loadKinoboxSdk();
+    if (attemptId !== alternateAttemptId) return;
+
+    const slot = document.createElement('div');
+    slot.className = 'mv-kinobox-slot';
+    slot.dataset.kinopoisk = String(currentMovie.id);
+    host.appendChild(slot);
+
+    alternateInstance = window.kinobox(slot, {
+      baseUrl: CONFIG.KINOBOX_BASE_URL,
+      search: { kinopoisk: String(currentMovie.id) },
+      notFoundMessage: 'Запасные источники для этого фильма не найдены.',
+      events: {
+        playerLoaded(result) {
+          if (attemptId !== alternateAttemptId) return;
+          clearTimeout(alternateTimer);
+          const players = Array.isArray(result?.data)
+            ? result.data.filter(item => item && item.iframeUrl)
+            : [];
+          setAlternateStarting(false);
+          if (players.length) {
+            const word = players.length === 1 ? 'источник' : players.length < 5 ? 'источника' : 'источников';
+            setAlternateStatus(`Найдено ${players.length} ${word}. Переключение доступно внутри запасного плеера.`, 'ready');
+          } else {
+            const message = result?.error?.title || 'Запасные источники не найдены.';
+            setAlternateStatus(message, 'error');
+          }
+        }
+      }
+    });
+
+    alternateTimer = setTimeout(() => {
+      if (attemptId !== alternateAttemptId) return;
+      const iframe = host.querySelector('iframe');
+      if (iframe) {
+        setAlternateStarting(false);
+        setAlternateStatus('Запасной плеер подключён.', 'ready');
+      } else {
+        setAlternateStarting(false);
+        setAlternateStatus('Запасной сервис отвечает дольше обычного. Можно повторить или вернуться к основному источнику.', 'error');
+      }
+    }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
+  } catch (error) {
+    if (attemptId !== alternateAttemptId) return;
+    clearTimeout(alternateTimer);
+    setAlternateStarting(false);
+    console.warn('[MVPoisk alternate player]', error);
+    host.replaceChildren();
+    host.innerHTML = '<div class="alternate-player-error"><div class="player-fail-mark">!</div><strong>Запасной источник недоступен</strong><span>Основной плеер можно запустить снова одной кнопкой.</span></div>';
+    setAlternateStatus('Не удалось подключить запасной сервис.', 'error');
+  }
+}
+
+async function startPrimaryPlayer(force = false) {
+  stopAlternatePlayer({ hide: true });
+  return startEmbeddedPlayer(force);
+}
+
 async function startEmbeddedPlayer(force = false) {
   if (!currentMovie) return;
   const { section, host } = playerElements();
@@ -316,10 +469,13 @@ async function startEmbeddedPlayer(force = false) {
 
 function bindWatchAction() {
   const button = document.querySelector('[data-watch-action]');
-  button?.addEventListener('click', () => startEmbeddedPlayer(false));
+  button?.addEventListener('click', () => startPrimaryPlayer(false));
 
-  document.querySelector('[data-player-retry]')?.addEventListener('click', () => startEmbeddedPlayer(true));
-  document.querySelector('[data-player-close]')?.addEventListener('click', () => stopEmbeddedPlayer({ hide: true }));
+  document.querySelector('[data-player-retry]')?.addEventListener('click', () => startPrimaryPlayer(true));
+  document.querySelector('[data-player-alternate]')?.addEventListener('click', () => startAlternatePlayer(false));
+  document.querySelector('[data-alternate-retry]')?.addEventListener('click', () => startAlternatePlayer(true));
+  document.querySelector('[data-player-primary]')?.addEventListener('click', () => startPrimaryPlayer(true));
+  document.querySelector('[data-player-close]')?.addEventListener('click', closePlayerSection);
 
   document.querySelectorAll('[data-partner-watch]').forEach(link => {
     link.addEventListener('click', event => {
@@ -456,12 +612,28 @@ function renderMovie(movie) {
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
+            <button type="button" class="player-mini-button player-source-button" data-player-alternate>Другой источник</button>
             <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть у партнёра ↗</a>
             <button type="button" class="player-mini-button" data-player-close>Закрыть</button>
           </div>
         </div>
         <div class="embedded-player-stage" id="embeddedPlayerHost"></div>
         <div class="embedded-player-status" id="embeddedPlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Плеер ещё не запускался.</span></div>
+        <div class="alternate-player-panel" id="alternatePlayerPanel" hidden>
+          <div class="alternate-player-heading">
+            <div>
+              <span class="eyebrow">Запасной просмотр</span>
+              <h3>Другие источники</h3>
+              <p>Загружаются только по твоему запросу. Выбери доступный вариант внутри плеера.</p>
+            </div>
+            <div class="alternate-player-actions">
+              <button type="button" class="player-mini-button" data-alternate-retry>Повторить поиск</button>
+              <button type="button" class="player-mini-button player-mini-primary" data-player-primary>Основной источник</button>
+            </div>
+          </div>
+          <div class="alternate-player-host" id="alternatePlayerHost"></div>
+          <div class="embedded-player-status alternate-player-status" id="alternatePlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Запасной источник ещё не запускался.</span></div>
+        </div>
       </div>
     </section>
     <div class="movie-content">
