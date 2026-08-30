@@ -1,12 +1,29 @@
-# MVPoisk v33
+# MVPoisk v36 — Telegram Accounts + TV Pairing
 
-TV polish on top of v32. Desktop/mobile remain unchanged.
+Что добавлено:
 
-TV changes:
-- the whole search bar is now a D-pad focus target; OK explicitly opens the Android TV keyboard;
-- catalogue and saved-film shelves use two visible rows instead of one extremely long strip;
-- two-row shelves use geometric D-pad navigation;
-- the on-screen Back button is removed from playback (remote Back only);
-- Android TV wrapper v4 fades the virtual player cursor after inactivity and restores it on D-pad movement.
+- вход/регистрация одним действием через Telegram;
+- без email, паролей, SMTP и почтовых кодов;
+- профиль Telegram (имя, username, avatar — если Telegram их отдаёт);
+- облачная синхронизация существующих данных MVPoisk через Supabase;
+- сохранение локального режима/кэша;
+- TV-вход по одноразовому коду с уже авторизованного телефона/ПК;
+- отдельный TV device token — Telegram/Supabase access token телефона на телевизор не копируется;
+- отключение телевизора через «Выйти/Отключить этот телевизор»;
+- Cloudflare Worker остаётся единым: movie API + TV pairing/state bridge.
 
-The Cloudflare Worker/API and partner-player integrations are unchanged.
+## Главное
+
+Перед публикацией заполни `SUPABASE_URL` и `SUPABASE_PUBLISHABLE_KEY` в `js/config.js`, выполни `supabase/schema.sql`, настрой Telegram как Custom OIDC provider в Supabase и добавь в Cloudflare Worker секреты `SUPABASE_URL` + `SUPABASE_SECRET_KEY`.
+
+Полный порядок: `TELEGRAM-ACCOUNTS-SETUP.md`.
+
+## Безопасность
+
+Никогда не клади в GitHub/frontend:
+
+- Telegram Client Secret;
+- Supabase `service_role` key;
+- любые секреты Cloudflare Worker.
+
+В `js/config.js` допустимы только публичные `Project URL` и `Publishable/anon key`.

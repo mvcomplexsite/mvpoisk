@@ -4,6 +4,18 @@
 // be shared from one cache between all visitors.
 export const CONFIG = Object.freeze({
   API_BASE: 'https://mvpoisk.cizikvpn.workers.dev/api/v1.4',
+
+  // ===== Accounts (Supabase) =====
+  // Paste ONLY the public project URL and the publishable/anon key here.
+  // Never put a service_role key in the frontend.
+  SUPABASE_URL: 'https://ymyjqczmxiimeztybdfm.supabase.co',
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_yo2Xpkq6Ple1w1khxpm1Nw_7xuu1y6N',
+  SUPABASE_STATE_TABLE: 'mvpoisk_user_state',
+  AUTH_REDIRECT_URL: 'https://mvcomplexsite.github.io/mvpoisk/',
+  // Telegram is configured as a Custom OIDC provider in Supabase Auth.
+  TELEGRAM_OIDC_PROVIDER: 'custom:telegram',
+  // TV pairing/state API lives on the same Cloudflare Worker as the movie API.
+  AUTH_WORKER_BASE: 'https://mvpoisk.cizikvpn.workers.dev',
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',

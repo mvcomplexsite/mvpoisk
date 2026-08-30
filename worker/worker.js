@@ -1,5 +1,5 @@
 // MVPoisk API cache + API-key pool for Cloudflare Workers.
-// v20: balanced key pool, automatic failover and temporary cooldowns.
+// v36: movie API key pool + Telegram account TV pairing/state bridge.
 //
 // Add legitimate API keys as Cloudflare secrets:
 // KINOPOISK_API_KEY_1 ... KINOPOISK_API_KEY_20
@@ -15,8 +15,8 @@ const SHORT_RATE_LIMIT_COOLDOWN_SECONDS = 2 * 60;
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Accept, Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Accept, Content-Type, Authorization',
     'Access-Control-Expose-Headers': 'X-MVPoisk-Cache, X-MVPoisk-Upstream-Key, X-MVPoisk-Key-Pool',
     'Vary': 'Origin',
   };
@@ -193,12 +193,288 @@ async function poolStatus(cache, slots) {
   }));
 }
 
+
+// ===== MVPoisk Accounts / TV pairing =====
+const TV_PAIR_TTL_SECONDS = 10 * 60;
+const TV_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function supabaseSettings(env) {
+  return {
+    url: String(env.SUPABASE_URL || '').replace(/\/$/, ''),
+    serviceKey: String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || ''),
+  };
+}
+
+function authConfigured(env) {
+  const cfg = supabaseSettings(env);
+  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cfg.url) && cfg.serviceKey.length > 20;
+}
+
+async function readJsonBody(request) {
+  try { return await request.json(); } catch { return {}; }
+}
+
+function cleanCode(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+}
+
+function formatCode(code) {
+  const clean = cleanCode(code);
+  return clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
+}
+
+function randomCode(length = 6) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (const byte of bytes) out += TV_CODE_ALPHABET[byte % TV_CODE_ALPHABET.length];
+  return out;
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || '')));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function validHash(value) {
+  return /^[a-f0-9]{64}$/i.test(String(value || ''));
+}
+
+async function supabaseFetch(env, path, options = {}) {
+  const cfg = supabaseSettings(env);
+  if (!authConfigured(env)) throw new Error('supabase_not_configured');
+  const baseHeaders = {
+    apikey: cfg.serviceKey,
+    'Content-Type': 'application/json',
+  };
+  // Legacy service_role keys are JWTs and can be sent as Bearer. New
+  // sb_secret_ keys must stay in the apikey header only.
+  if (!cfg.serviceKey.startsWith('sb_secret_')) baseHeaders.Authorization = `Bearer ${cfg.serviceKey}`;
+  const response = await fetch(`${cfg.url}${path}`, {
+    ...options,
+    headers: {
+      ...baseHeaders,
+      ...(options.headers || {}),
+    },
+  });
+  return response;
+}
+
+async function supabaseJson(env, path, options = {}) {
+  const response = await supabaseFetch(env, path, options);
+  let data = null;
+  try { data = await response.json(); } catch {}
+  if (!response.ok) {
+    const error = new Error(data?.message || data?.error_description || data?.error || `Supabase HTTP ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  return { data, response };
+}
+
+async function validateSupabaseUser(request, env) {
+  const header = request.headers.get('Authorization') || '';
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  if (!match || match[1].startsWith('mvptv_')) return null;
+  const cfg = supabaseSettings(env);
+  if (!authConfigured(env)) return null;
+  const response = await fetch(`${cfg.url}/auth/v1/user`, {
+    headers: {
+      apikey: cfg.serviceKey,
+      Authorization: `Bearer ${match[1]}`,
+      Accept: 'application/json',
+    },
+  });
+  if (!response.ok) return null;
+  try { return await response.json(); } catch { return null; }
+}
+
+function profileFromAuthUser(user) {
+  if (!user) return { name: 'Пользователь' };
+  const identity = Array.isArray(user.identities)
+    ? user.identities.find(item => String(item?.provider || '').includes('telegram')) || user.identities[0]
+    : null;
+  const meta = { ...(identity?.identity_data || {}), ...(user?.user_metadata || {}) };
+  return {
+    name: String(meta.name || meta.full_name || meta.display_name || meta.given_name || meta.preferred_username || 'Пользователь'),
+    username: String(meta.preferred_username || meta.username || '').replace(/^@/, ''),
+    avatarUrl: String(meta.picture || meta.avatar_url || ''),
+    telegramId: String(meta.id || meta.sub || identity?.provider_id || ''),
+  };
+}
+
+async function insertTvPair(env, body) {
+  const claimSecretHash = String(body.claimSecretHash || '').toLowerCase();
+  const deviceTokenHash = String(body.deviceTokenHash || '').toLowerCase();
+  const deviceName = String(body.deviceName || 'MVPoisk TV').slice(0, 120);
+  if (!validHash(claimSecretHash) || !validHash(deviceTokenHash)) {
+    return json({ error: 'invalid_pair_request', message: 'Некорректный запрос подключения.' }, 400);
+  }
+
+  const expiresAt = new Date(Date.now() + TV_PAIR_TTL_SECONDS * 1000).toISOString();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomCode(6);
+    try {
+      const { data } = await supabaseJson(env, '/rest/v1/mvpoisk_tv_devices', {
+        method: 'POST',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          pair_code: code,
+          claim_secret_hash: claimSecretHash,
+          device_token_hash: deviceTokenHash,
+          device_name: deviceName,
+          status: 'pending',
+          expires_at: expiresAt,
+        }),
+      });
+      if (Array.isArray(data) && data[0]) {
+        return json({ code, displayCode: formatCode(code), expiresAt }, 201);
+      }
+    } catch (error) {
+      if (error.status === 409) continue;
+      throw error;
+    }
+  }
+  return json({ error: 'pair_code_generation_failed' }, 503);
+}
+
+async function findPair(env, code, extraQuery = '') {
+  const clean = cleanCode(code);
+  if (clean.length < 6) return null;
+  const query = `/rest/v1/mvpoisk_tv_devices?pair_code=eq.${encodeURIComponent(clean)}${extraQuery}&select=id,pair_code,claim_secret_hash,device_token_hash,device_name,user_id,profile,status,expires_at,approved_at,revoked_at`;
+  const { data } = await supabaseJson(env, query, { method: 'GET' });
+  return Array.isArray(data) ? data[0] || null : null;
+}
+
+function pairExpired(row) {
+  return !row?.expires_at || Date.parse(row.expires_at) <= Date.now();
+}
+
+async function approveTvPair(request, env, body) {
+  const user = await validateSupabaseUser(request, env);
+  if (!user?.id) return json({ error: 'unauthorized', message: 'Сначала войдите в MVPoisk через Telegram.' }, 401);
+  const row = await findPair(env, body.code);
+  if (!row || row.revoked_at) return json({ error: 'invalid_code', message: 'Код не найден.' }, 404);
+  if (pairExpired(row)) return json({ error: 'expired_code', message: 'Код подключения истёк.' }, 410);
+  if (row.status === 'approved' && row.user_id && row.user_id !== user.id) return json({ error: 'already_approved' }, 409);
+
+  const now = new Date().toISOString();
+  await supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(row.id)}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({
+      user_id: user.id,
+      profile: profileFromAuthUser(user),
+      status: 'approved',
+      approved_at: now,
+      last_seen_at: now,
+    }),
+  });
+  return json({ ok: true, status: 'approved', deviceName: row.device_name });
+}
+
+async function pollTvPair(env, body) {
+  const row = await findPair(env, body.code);
+  if (!row || row.revoked_at) return json({ status: 'invalid' }, 404);
+  const supplied = String(body.claimSecretHash || '').toLowerCase();
+  if (!validHash(supplied) || supplied !== String(row.claim_secret_hash || '').toLowerCase()) {
+    return json({ error: 'forbidden' }, 403);
+  }
+  if (row.status !== 'approved' && pairExpired(row)) return json({ status: 'expired' }, 410);
+  if (row.status !== 'approved' || !row.user_id) return json({ status: 'pending', expiresAt: row.expires_at });
+  return json({ status: 'approved', profile: row.profile || { name: 'Пользователь' }, deviceName: row.device_name });
+}
+
+async function authenticateTvDevice(request, env) {
+  const header = request.headers.get('Authorization') || '';
+  const match = /^Bearer\s+(mvptv_[A-Za-z0-9_-]{20,})$/i.exec(header);
+  if (!match) return null;
+  const tokenHash = await sha256Hex(match[1]);
+  const path = `/rest/v1/mvpoisk_tv_devices?device_token_hash=eq.${tokenHash}&status=eq.approved&revoked_at=is.null&select=id,user_id,device_name,profile,status,revoked_at`;
+  const { data } = await supabaseJson(env, path, { method: 'GET' });
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row?.user_id) return null;
+  // Best-effort activity timestamp; do not block the main request if it fails.
+  supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(row.id)}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({ last_seen_at: new Date().toISOString() }),
+  }).catch(() => {});
+  return row;
+}
+
+async function readUserState(env, userId) {
+  const { data } = await supabaseJson(env, `/rest/v1/mvpoisk_user_state?user_id=eq.${encodeURIComponent(userId)}&select=state,updated_at`, { method: 'GET' });
+  return Array.isArray(data) ? data[0] || null : null;
+}
+
+async function writeUserState(env, userId, state) {
+  const safeState = state && typeof state === 'object' ? state : {};
+  const raw = JSON.stringify(safeState);
+  if (raw.length > 1_600_000) return { tooLarge: true };
+  const { data } = await supabaseJson(env, '/rest/v1/mvpoisk_user_state?on_conflict=user_id', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify({ user_id: userId, state: safeState }),
+  });
+  return Array.isArray(data) ? data[0] || null : data;
+}
+
+async function handleAuth(request, env, incoming) {
+  if (!authConfigured(env)) return json({ error: 'auth_not_configured', message: 'Supabase secrets are not configured on the Worker.' }, 503);
+  const path = incoming.pathname;
+
+  try {
+    if (path === '/auth/tv/pair/start' && request.method === 'POST') {
+      return insertTvPair(env, await readJsonBody(request));
+    }
+    if (path === '/auth/tv/pair/poll' && request.method === 'POST') {
+      return pollTvPair(env, await readJsonBody(request));
+    }
+    if (path === '/auth/tv/pair/approve' && request.method === 'POST') {
+      return approveTvPair(request, env, await readJsonBody(request));
+    }
+
+    const device = await authenticateTvDevice(request, env);
+    if (!device) return json({ error: 'unauthorized', message: 'TV-сессия недействительна.' }, 401);
+
+    if (path === '/auth/tv/me' && request.method === 'GET') {
+      return json({ ok: true, profile: device.profile || { name: 'Пользователь' }, deviceName: device.device_name });
+    }
+    if (path === '/auth/tv/state' && request.method === 'GET') {
+      const row = await readUserState(env, device.user_id);
+      return json(row || null);
+    }
+    if (path === '/auth/tv/state' && request.method === 'PUT') {
+      const body = await readJsonBody(request);
+      const row = await writeUserState(env, device.user_id, body.state);
+      if (row?.tooLarge) return json({ error: 'state_too_large' }, 413);
+      return json(row || { state: body.state, updated_at: new Date().toISOString() });
+    }
+    if (path === '/auth/tv/device' && request.method === 'DELETE') {
+      await supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(device.id)}`, {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ status: 'revoked', revoked_at: new Date().toISOString() }),
+      });
+      return json({ ok: true });
+    }
+    return json({ error: 'not_found' }, 404);
+  } catch (error) {
+    console.error('MVPoisk auth worker:', error);
+    return json({ error: 'auth_backend_error', message: error?.message || 'Auth backend error' }, error?.status && error.status < 500 ? error.status : 500);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
-    if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 
     const incoming = new URL(request.url);
+    if (incoming.pathname.startsWith('/auth/')) return handleAuth(request, env, incoming);
+    if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+
     const cache = caches.default;
     const slots = getKeySlots(env);
 
@@ -206,13 +482,15 @@ export default {
       const status = await poolStatus(cache, slots);
       return json({
         ok: true,
-        service: 'MVPoisk API cache + key pool',
-        version: 20,
+        service: 'MVPoisk API cache + key pool + TV auth bridge',
+        version: 36,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,
         readyKeys: status.filter(item => item.state === 'ready').length,
         strategy: 'balanced pool + automatic failover',
+        accountsConfigured: authConfigured(env),
+        tvPairing: authConfigured(env) ? 'ready' : 'needs SUPABASE_URL + SUPABASE_SECRET_KEY',
         keys: status,
       });
     }

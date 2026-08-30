@@ -96,7 +96,9 @@ function preferredTarget() {
 }
 
 function moveFocus(direction) {
-  const items = focusables().filter(el => !(el instanceof HTMLIFrameElement));
+  const accountDialog = document.querySelector('#accountModal:not([hidden]) .account-card');
+  const scope = accountDialog instanceof HTMLElement ? accountDialog : document;
+  const items = focusables(scope).filter(el => !(el instanceof HTMLIFrameElement));
   if (!items.length) return false;
   const current = document.activeElement instanceof HTMLElement && isVisible(document.activeElement)
     ? document.activeElement

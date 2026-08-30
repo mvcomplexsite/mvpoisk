@@ -4,7 +4,10 @@ const KEYS = Object.freeze({
   favorites: 'mvpoisk:favorites:v1',
   history: 'mvpoisk:watch-history:v1',
   watchNoticeDismissed: 'mvpoisk:watch-notice-dismissed:v1',
+  syncMeta: 'mvpoisk:cloud-sync-meta:v1',
 });
+
+const SYNCED_KEYS = new Set([KEYS.profile, KEYS.watchLater, KEYS.favorites, KEYS.history]);
 
 function read(key, fallback) {
   try {
@@ -15,10 +18,31 @@ function read(key, fallback) {
   }
 }
 
-function write(key, value) {
+function rawWrite(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function readSyncMeta() {
+  const meta = read(KEYS.syncMeta, {});
+  return {
+    localUpdatedAt: Number(meta?.localUpdatedAt || 0),
+    lastSyncedLocalUpdatedAt: Number(meta?.lastSyncedLocalUpdatedAt || 0),
+    lastCloudUpdatedAt: typeof meta?.lastCloudUpdatedAt === 'string' ? meta.lastCloudUpdatedAt : '',
+  };
+}
+
+function touchLocalState() {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
-    window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key } }));
+    const meta = readSyncMeta();
+    rawWrite(KEYS.syncMeta, { ...meta, localUpdatedAt: Date.now() });
+  } catch {}
+}
+
+function write(key, value, { touch = SYNCED_KEYS.has(key), dispatch = true } = {}) {
+  try {
+    rawWrite(key, value);
+    if (touch) touchLocalState();
+    if (dispatch) window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key } }));
     return true;
   } catch {
     return false;
@@ -37,7 +61,10 @@ export function saveProfile(name) {
 }
 
 export function clearProfile() {
-  try { localStorage.removeItem(KEYS.profile); } catch {}
+  try {
+    localStorage.removeItem(KEYS.profile);
+    touchLocalState();
+  } catch {}
   window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key: KEYS.profile } }));
 }
 
@@ -232,6 +259,77 @@ export function counts() {
     history: getHistory().length,
     continueWatching: getContinueWatching(300).length,
   };
+}
+
+export function exportLocalState() {
+  return {
+    version: 1,
+    profile: getProfile(),
+    watchLater: getList('watchLater'),
+    favorites: getList('favorites'),
+    history: getHistory(),
+  };
+}
+
+export function hasLocalUserData() {
+  const state = exportLocalState();
+  return Boolean(state.profile || state.watchLater.length || state.favorites.length || state.history.length);
+}
+
+export function getCloudSyncMeta() {
+  return readSyncMeta();
+}
+
+export function markCloudSynced(cloudUpdatedAt = '') {
+  try {
+    const meta = readSyncMeta();
+    rawWrite(KEYS.syncMeta, {
+      ...meta,
+      lastSyncedLocalUpdatedAt: meta.localUpdatedAt,
+      lastCloudUpdatedAt: String(cloudUpdatedAt || meta.lastCloudUpdatedAt || ''),
+    });
+  } catch {}
+}
+
+function normalizeStateList(items, max = 300) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  return items.filter(item => {
+    const id = Number(item?.id);
+    if (!Number.isFinite(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  }).slice(0, max);
+}
+
+export function applyLocalState(state = {}, { cloudUpdatedAt = '', synced = true } = {}) {
+  const profile = state?.profile && typeof state.profile.name === 'string' ? state.profile : null;
+  const watchLater = normalizeStateList(state?.watchLater, 250);
+  const favorites = normalizeStateList(state?.favorites, 250);
+  const history = normalizeStateList(state?.history, 300).map(normalizeHistoryEntry).filter(Boolean);
+  const now = Date.now();
+  try {
+    if (profile) rawWrite(KEYS.profile, profile); else localStorage.removeItem(KEYS.profile);
+    rawWrite(KEYS.watchLater, watchLater);
+    rawWrite(KEYS.favorites, favorites);
+    rawWrite(KEYS.history, history);
+    const previous = readSyncMeta();
+    rawWrite(KEYS.syncMeta, {
+      ...previous,
+      localUpdatedAt: now,
+      lastSyncedLocalUpdatedAt: synced ? now : previous.lastSyncedLocalUpdatedAt,
+      lastCloudUpdatedAt: synced ? String(cloudUpdatedAt || previous.lastCloudUpdatedAt || '') : previous.lastCloudUpdatedAt,
+    });
+  } catch { return false; }
+  window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key: 'cloud-state' } }));
+  return true;
+}
+
+export function clearLocalUserData() {
+  try {
+    [KEYS.profile, KEYS.watchLater, KEYS.favorites, KEYS.history, KEYS.syncMeta].forEach(key => localStorage.removeItem(key));
+  } catch {}
+  window.dispatchEvent(new CustomEvent('mvpoisk:storage-changed', { detail: { key: 'account-signout' } }));
 }
 
 export function isWatchNoticeDismissed() {
