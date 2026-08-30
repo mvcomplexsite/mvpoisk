@@ -1,4 +1,4 @@
-import { getProfile, saveProfile, counts } from './storage.js?v=36';
+import { getProfile, saveProfile, counts } from './storage.js?v=37';
 import {
   initAccounts,
   getAccountState,
@@ -11,7 +11,7 @@ import {
   beginTvPairing,
   pollTvPairing,
   approveTvPairCode,
-} from './account.js?v=36';
+} from './account.js?v=37';
 
 let tvPollTimer = null;
 
@@ -85,7 +85,7 @@ function localProfileMarkup() {
       <label><span>Имя</span><input name="name" maxlength="32" autocomplete="nickname" placeholder="Например, Алекс" value="${esc(profile?.name || '')}"></label>
       <button class="primary-action" type="submit">Сохранить</button>
     </form>
-    <div class="account-setup-note">Для Telegram-входа нужно настроить Supabase Custom OIDC и заполнить публичные <code>SUPABASE_URL</code> + <code>SUPABASE_PUBLISHABLE_KEY</code>.</div>`;
+    <div class="account-setup-note">Для Telegram-входа нужно подключить D1 к Cloudflare Worker и добавить Telegram Client ID/Secret в его Secrets.</div>`;
 }
 
 function telegramGuestMarkup() {
@@ -115,7 +115,7 @@ function tvGuestMarkup() {
     return `
       <span class="eyebrow">Вход на телевизоре</span>
       <h2 id="accountTitle">TV-вход ещё не настроен</h2>
-      <p class="modal-copy">Нужно подключить Supabase и Auth Worker. После этого здесь появится одноразовый код.</p>`;
+      <p class="modal-copy">Нужно подключить D1 к Cloudflare Worker. После этого здесь появится одноразовый код.</p>`;
   }
   if (!pairing?.code || Number(pairing.expiresAt || 0) <= Date.now()) {
     return `
@@ -178,7 +178,7 @@ function accountMarkup() {
 
 function friendlyError(error) {
   const text = String(error?.message || error || 'Неизвестная ошибка');
-  if (/provider.*not.*enabled|unsupported provider/i.test(text)) return 'Telegram-вход ещё не включён в Supabase.';
+  if (/auth_not_configured|telegram.*not.*configured/i.test(text)) return 'Telegram-вход ещё не настроен в Cloudflare.';
   if (/expired/i.test(text)) return 'Код подключения истёк. Получите новый код на телевизоре.';
   if (/not.?found|invalid.?code/i.test(text)) return 'Код не найден или уже недействителен.';
   if (/network|fetch/i.test(text)) return 'Нет соединения с сервером. Попробуйте ещё раз.';
@@ -406,7 +406,7 @@ function setupInstall() {
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { await navigator.serviceWorker.register('./sw.js?v=36'); } catch (error) { console.warn('PWA service worker:', error); }
+  try { await navigator.serviceWorker.register('./sw.js?v=37'); } catch (error) { console.warn('PWA service worker:', error); }
 }
 
 

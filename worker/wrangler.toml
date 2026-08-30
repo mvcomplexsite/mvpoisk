@@ -1,3 +1,13 @@
 name = "mvpoisk"
 main = "worker.js"
-compatibility_date = "2026-08-28"
+compatibility_date = "2026-08-30"
+
+# For Wrangler deployments, bind the D1 database here after creating it.
+# If you deploy from the Cloudflare dashboard, create the same binding there:
+# binding name: DB
+# database: mvpoisk-db
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "mvpoisk-db"
+# database_id = "PASTE_D1_DATABASE_ID_HERE"

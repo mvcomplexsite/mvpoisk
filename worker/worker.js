@@ -194,20 +194,25 @@ async function poolStatus(cache, slots) {
 }
 
 
-// ===== MVPoisk Accounts / TV pairing =====
+// ===== MVPoisk Accounts / Telegram OIDC / D1 / TV pairing =====
 const TV_PAIR_TTL_SECONDS = 10 * 60;
+const WEB_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
+const AUTH_FLOW_TTL_SECONDS = 10 * 60;
+const AUTH_HANDOFF_TTL_SECONDS = 2 * 60;
 const TV_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const DEFAULT_FRONTEND_URL = 'https://mvcomplexsite.github.io/mvpoisk/';
+let telegramJwksMemory = { expiresAt: 0, keys: [] };
 
-function supabaseSettings(env) {
-  return {
-    url: String(env.SUPABASE_URL || '').replace(/\/$/, ''),
-    serviceKey: String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || ''),
-  };
+function d1Configured(env) {
+  return Boolean(env.DB && typeof env.DB.prepare === 'function');
+}
+
+function telegramConfigured(env) {
+  return Boolean(String(env.TELEGRAM_CLIENT_ID || '').trim() && String(env.TELEGRAM_CLIENT_SECRET || '').trim());
 }
 
 function authConfigured(env) {
-  const cfg = supabaseSettings(env);
-  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cfg.url) && cfg.serviceKey.length > 20;
+  return d1Configured(env) && telegramConfigured(env);
 }
 
 async function readJsonBody(request) {
@@ -223,85 +228,362 @@ function formatCode(code) {
   return clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
 }
 
-function randomCode(length = 6) {
-  const bytes = new Uint8Array(length);
+function randomBytes(size = 32) {
+  const bytes = new Uint8Array(size);
   crypto.getRandomValues(bytes);
+  return bytes;
+}
+
+function base64urlFromBytes(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64urlDecode(value) {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function randomToken(prefix = '', size = 32) {
+  return `${prefix}${base64urlFromBytes(randomBytes(size))}`;
+}
+
+function randomCode(length = 6) {
+  const bytes = randomBytes(length);
   let out = '';
   for (const byte of bytes) out += TV_CODE_ALPHABET[byte % TV_CODE_ALPHABET.length];
   return out;
 }
 
+async function sha256Bytes(value) {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || ''))));
+}
+
 async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || '')));
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const digest = await sha256Bytes(value);
+  return [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Base64url(value) {
+  return base64urlFromBytes(await sha256Bytes(value));
 }
 
 function validHash(value) {
   return /^[a-f0-9]{64}$/i.test(String(value || ''));
 }
 
-async function supabaseFetch(env, path, options = {}) {
-  const cfg = supabaseSettings(env);
-  if (!authConfigured(env)) throw new Error('supabase_not_configured');
-  const baseHeaders = {
-    apikey: cfg.serviceKey,
-    'Content-Type': 'application/json',
-  };
-  // Legacy service_role keys are JWTs and can be sent as Bearer. New
-  // sb_secret_ keys must stay in the apikey header only.
-  if (!cfg.serviceKey.startsWith('sb_secret_')) baseHeaders.Authorization = `Bearer ${cfg.serviceKey}`;
-  const response = await fetch(`${cfg.url}${path}`, {
-    ...options,
-    headers: {
-      ...baseHeaders,
-      ...(options.headers || {}),
-    },
-  });
-  return response;
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
 }
 
-async function supabaseJson(env, path, options = {}) {
-  const response = await supabaseFetch(env, path, options);
-  let data = null;
-  try { data = await response.json(); } catch {}
-  if (!response.ok) {
-    const error = new Error(data?.message || data?.error_description || data?.error || `Supabase HTTP ${response.status}`);
-    error.status = response.status;
-    error.data = data;
-    throw error;
+function allowedFrontendBases(env) {
+  const configured = String(env.AUTH_FRONTEND_URLS || env.AUTH_FRONTEND_URL || DEFAULT_FRONTEND_URL)
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  return configured.length ? configured : [DEFAULT_FRONTEND_URL];
+}
+
+function safeReturnUrl(env, candidate) {
+  let target;
+  try { target = new URL(String(candidate || DEFAULT_FRONTEND_URL)); } catch { target = new URL(DEFAULT_FRONTEND_URL); }
+  if (target.protocol !== 'https:') return DEFAULT_FRONTEND_URL;
+  for (const baseValue of allowedFrontendBases(env)) {
+    try {
+      const base = new URL(baseValue);
+      const prefix = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
+      if (target.origin === base.origin && (target.pathname === base.pathname || target.pathname.startsWith(prefix))) {
+        return target.toString();
+      }
+    } catch {}
   }
-  return { data, response };
+  return allowedFrontendBases(env)[0] || DEFAULT_FRONTEND_URL;
 }
 
-async function validateSupabaseUser(request, env) {
-  const header = request.headers.get('Authorization') || '';
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  if (!match || match[1].startsWith('mvptv_')) return null;
-  const cfg = supabaseSettings(env);
-  if (!authConfigured(env)) return null;
-  const response = await fetch(`${cfg.url}/auth/v1/user`, {
-    headers: {
-      apikey: cfg.serviceKey,
-      Authorization: `Bearer ${match[1]}`,
-      Accept: 'application/json',
-    },
-  });
-  if (!response.ok) return null;
-  try { return await response.json(); } catch { return null; }
+function telegramCallbackUrl(request, env) {
+  const explicit = String(env.AUTH_CALLBACK_URL || '').trim();
+  if (explicit) return explicit;
+  const incoming = new URL(request.url);
+  return `${incoming.origin}/auth/telegram/callback`;
 }
 
-function profileFromAuthUser(user) {
-  if (!user) return { name: 'Пользователь' };
-  const identity = Array.isArray(user.identities)
-    ? user.identities.find(item => String(item?.provider || '').includes('telegram')) || user.identities[0]
-    : null;
-  const meta = { ...(identity?.identity_data || {}), ...(user?.user_metadata || {}) };
+function profileFromUserRow(row) {
+  if (!row) return { name: 'Пользователь', username: '', avatarUrl: '', telegramId: '' };
   return {
-    name: String(meta.name || meta.full_name || meta.display_name || meta.given_name || meta.preferred_username || 'Пользователь'),
-    username: String(meta.preferred_username || meta.username || '').replace(/^@/, ''),
-    avatarUrl: String(meta.picture || meta.avatar_url || ''),
-    telegramId: String(meta.id || meta.sub || identity?.provider_id || ''),
+    name: String(row.display_name || row.telegram_name || row.username || 'Пользователь'),
+    username: String(row.username || '').replace(/^@/, ''),
+    avatarUrl: String(row.avatar_url || ''),
+    telegramId: String(row.telegram_id || row.telegram_sub || ''),
   };
+}
+
+async function d1First(env, sql, ...bindings) {
+  return env.DB.prepare(sql).bind(...bindings).first();
+}
+
+async function d1Run(env, sql, ...bindings) {
+  return env.DB.prepare(sql).bind(...bindings).run();
+}
+
+async function cleanupAuthRows(env) {
+  if (!d1Configured(env)) return;
+  const now = Date.now();
+  try {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM oauth_flows WHERE expires_at < ?').bind(now),
+      env.DB.prepare('DELETE FROM auth_handoffs WHERE expires_at < ? OR used_at IS NOT NULL').bind(now - 60_000),
+      env.DB.prepare('DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL').bind(now - 7 * 24 * 60 * 60 * 1000),
+      env.DB.prepare("DELETE FROM tv_pairs WHERE expires_at < ? AND status = 'pending'").bind(now - 60_000),
+    ]);
+  } catch {}
+}
+
+function parseJwtPart(part) {
+  try { return JSON.parse(new TextDecoder().decode(base64urlDecode(part))); } catch { return null; }
+}
+
+async function telegramJwks() {
+  if (telegramJwksMemory.expiresAt > Date.now() && telegramJwksMemory.keys.length) return telegramJwksMemory.keys;
+  const response = await fetch('https://oauth.telegram.org/.well-known/jwks.json', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`telegram_jwks_http_${response.status}`);
+  const data = await response.json();
+  const keys = Array.isArray(data?.keys) ? data.keys : [];
+  if (!keys.length) throw new Error('telegram_jwks_empty');
+  telegramJwksMemory = { expiresAt: Date.now() + 10 * 60 * 1000, keys };
+  return keys;
+}
+
+async function verifyTelegramIdToken(idToken, clientId) {
+  const parts = String(idToken || '').split('.');
+  if (parts.length !== 3) throw new Error('telegram_invalid_id_token');
+  const header = parseJwtPart(parts[0]);
+  const claims = parseJwtPart(parts[1]);
+  if (!header || !claims || header.alg !== 'RS256') throw new Error('telegram_invalid_jwt_header');
+
+  const keys = await telegramJwks();
+  const jwk = keys.find(item => item.kid === header.kid) || (keys.length === 1 ? keys[0] : null);
+  if (!jwk) throw new Error('telegram_signing_key_not_found');
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const signed = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+  const signature = base64urlDecode(parts[2]);
+  const verified = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, key, signature, signed);
+  if (!verified) throw new Error('telegram_invalid_signature');
+
+  const now = nowSeconds();
+  const aud = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
+  if (claims.iss !== 'https://oauth.telegram.org') throw new Error('telegram_invalid_issuer');
+  if (!aud.includes(String(clientId))) throw new Error('telegram_invalid_audience');
+  if (!Number.isFinite(Number(claims.exp)) || Number(claims.exp) < now - 30) throw new Error('telegram_token_expired');
+  if (!claims.sub) throw new Error('telegram_missing_subject');
+  return claims;
+}
+
+async function upsertTelegramUser(env, claims) {
+  const now = Date.now();
+  const userId = `tg:${String(claims.sub)}`;
+  const telegramName = String(claims.name || claims.given_name || claims.preferred_username || 'Пользователь').slice(0, 120);
+  const username = String(claims.preferred_username || '').replace(/^@/, '').slice(0, 80);
+  const avatarUrl = String(claims.picture || '').slice(0, 1000);
+  const telegramId = String(claims.id || claims.sub || '').slice(0, 80);
+  await d1Run(env, `
+    INSERT INTO users (id, telegram_sub, telegram_id, telegram_name, username, display_name, avatar_url, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      telegram_id = excluded.telegram_id,
+      telegram_name = excluded.telegram_name,
+      username = excluded.username,
+      avatar_url = excluded.avatar_url,
+      updated_at = excluded.updated_at
+  `, userId, String(claims.sub), telegramId, telegramName, username, telegramName, avatarUrl, now, now);
+  return d1First(env, 'SELECT * FROM users WHERE id = ?', userId);
+}
+
+async function issueWebSession(env, userId, deviceName = 'Web') {
+  const token = randomToken('mvps_', 36);
+  const tokenHash = await sha256Hex(token);
+  const now = Date.now();
+  const expiresAt = now + WEB_SESSION_TTL_SECONDS * 1000;
+  await d1Run(env, `
+    INSERT INTO sessions (token_hash, user_id, device_type, device_name, created_at, last_seen_at, expires_at)
+    VALUES (?, ?, 'web', ?, ?, ?, ?)
+  `, tokenHash, userId, String(deviceName || 'Web').slice(0, 120), now, now, expiresAt);
+  return { token, expiresAt };
+}
+
+async function authenticateWebSession(request, env) {
+  const header = request.headers.get('Authorization') || '';
+  const match = /^Bearer\s+(mvps_[A-Za-z0-9_-]{20,})$/i.exec(header);
+  if (!match || !d1Configured(env)) return null;
+  const tokenHash = await sha256Hex(match[1]);
+  const now = Date.now();
+  const row = await d1First(env, `
+    SELECT s.token_hash, s.user_id, s.device_name, s.expires_at,
+           u.telegram_sub, u.telegram_id, u.telegram_name, u.username, u.display_name, u.avatar_url
+    FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+  `, tokenHash, now);
+  if (!row) return null;
+  d1Run(env, 'UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', now, tokenHash).catch(() => {});
+  return { tokenHash, userId: row.user_id, row, profile: profileFromUserRow(row) };
+}
+
+async function createTelegramAuth(request, env, incoming) {
+  if (!authConfigured(env)) {
+    return json({ error: 'auth_not_configured', message: 'Cloudflare D1 or Telegram OAuth secrets are not configured.' }, 503);
+  }
+  const returnUrl = safeReturnUrl(env, incoming.searchParams.get('return'));
+  const state = randomToken('', 24);
+  const verifier = randomToken('', 48);
+  const challenge = await sha256Base64url(verifier);
+  const now = Date.now();
+  await d1Run(env, `
+    INSERT INTO oauth_flows (state, code_verifier, return_url, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `, state, verifier, returnUrl, now, now + AUTH_FLOW_TTL_SECONDS * 1000);
+
+  const callback = telegramCallbackUrl(request, env);
+  const authUrl = new URL('https://oauth.telegram.org/auth');
+  authUrl.searchParams.set('client_id', String(env.TELEGRAM_CLIENT_ID));
+  authUrl.searchParams.set('redirect_uri', callback);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'openid profile');
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('code_challenge', challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  return Response.redirect(authUrl.toString(), 302);
+}
+
+async function telegramCallback(request, env, incoming) {
+  if (!authConfigured(env)) return json({ error: 'auth_not_configured' }, 503);
+  const code = incoming.searchParams.get('code');
+  const state = incoming.searchParams.get('state');
+  const oauthError = incoming.searchParams.get('error');
+  if (oauthError) {
+    const fallback = safeReturnUrl(env, DEFAULT_FRONTEND_URL);
+    const target = new URL(fallback);
+    target.hash = `mv_auth_error=${encodeURIComponent(oauthError)}`;
+    return Response.redirect(target.toString(), 302);
+  }
+  if (!code || !state) return json({ error: 'telegram_callback_missing_parameters' }, 400);
+
+  const flow = await d1First(env, 'SELECT state, code_verifier, return_url, expires_at FROM oauth_flows WHERE state = ?', state);
+  if (!flow || Number(flow.expires_at) <= Date.now()) return json({ error: 'telegram_auth_flow_expired' }, 410);
+  await d1Run(env, 'DELETE FROM oauth_flows WHERE state = ?', state);
+
+  const callback = telegramCallbackUrl(request, env);
+  const form = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: callback,
+    client_id: String(env.TELEGRAM_CLIENT_ID),
+    code_verifier: String(flow.code_verifier),
+  });
+  const basic = btoa(`${String(env.TELEGRAM_CLIENT_ID)}:${String(env.TELEGRAM_CLIENT_SECRET)}`);
+  const tokenResponse = await fetch('https://oauth.telegram.org/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${basic}`,
+      'Accept': 'application/json',
+    },
+    body: form.toString(),
+  });
+  let tokenData = null;
+  try { tokenData = await tokenResponse.json(); } catch {}
+  if (!tokenResponse.ok || !tokenData?.id_token) {
+    console.error('Telegram token exchange failed', tokenResponse.status, tokenData);
+    return json({ error: 'telegram_token_exchange_failed', status: tokenResponse.status }, 502);
+  }
+
+  const claims = await verifyTelegramIdToken(tokenData.id_token, String(env.TELEGRAM_CLIENT_ID));
+  const user = await upsertTelegramUser(env, claims);
+  const handoff = randomToken('mvah_', 32);
+  const handoffHash = await sha256Hex(handoff);
+  const now = Date.now();
+  await d1Run(env, `
+    INSERT INTO auth_handoffs (code_hash, user_id, created_at, expires_at)
+    VALUES (?, ?, ?, ?)
+  `, handoffHash, user.id, now, now + AUTH_HANDOFF_TTL_SECONDS * 1000);
+
+  const target = new URL(safeReturnUrl(env, flow.return_url));
+  target.hash = `mv_auth=${encodeURIComponent(handoff)}`;
+  return Response.redirect(target.toString(), 302);
+}
+
+async function exchangeHandoff(env, body) {
+  const handoff = String(body.handoff || '');
+  if (!/^mvah_[A-Za-z0-9_-]{20,}$/.test(handoff)) return json({ error: 'invalid_handoff' }, 400);
+  const hash = await sha256Hex(handoff);
+  const now = Date.now();
+  const row = await d1First(env, `
+    SELECT code_hash, user_id, expires_at, used_at FROM auth_handoffs
+    WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?
+  `, hash, now);
+  if (!row) return json({ error: 'handoff_expired' }, 410);
+  const consume = await d1Run(env, 'UPDATE auth_handoffs SET used_at = ? WHERE code_hash = ? AND used_at IS NULL', now, hash);
+  if (!consume?.meta || Number(consume.meta.changes || 0) < 1) return json({ error: 'handoff_already_used' }, 409);
+
+  const session = await issueWebSession(env, row.user_id, String(body.deviceName || 'Web'));
+  const user = await d1First(env, 'SELECT * FROM users WHERE id = ?', row.user_id);
+  return json({ ok: true, token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), profile: profileFromUserRow(user) });
+}
+
+async function updateWebProfile(request, env, body) {
+  const session = await authenticateWebSession(request, env);
+  if (!session) return json({ error: 'unauthorized' }, 401);
+  const displayName = String(body.displayName || body.name || '').trim().slice(0, 32);
+  if (!displayName) return json({ error: 'invalid_name', message: 'Введите имя.' }, 400);
+  await d1Run(env, 'UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?', displayName, Date.now(), session.userId);
+  const user = await d1First(env, 'SELECT * FROM users WHERE id = ?', session.userId);
+  return json({ ok: true, profile: profileFromUserRow(user) });
+}
+
+async function logoutWeb(request, env) {
+  const session = await authenticateWebSession(request, env);
+  if (!session) return json({ ok: true });
+  await d1Run(env, 'UPDATE sessions SET revoked_at = ? WHERE token_hash = ?', Date.now(), session.tokenHash);
+  return json({ ok: true });
+}
+
+async function readUserState(env, userId) {
+  const row = await d1First(env, 'SELECT state_json, updated_at FROM user_state WHERE user_id = ?', userId);
+  if (!row) return null;
+  let state = {};
+  try { state = JSON.parse(row.state_json || '{}'); } catch {}
+  return { state, updated_at: new Date(Number(row.updated_at || 0)).toISOString() };
+}
+
+async function writeUserState(env, userId, state) {
+  const safeState = state && typeof state === 'object' ? state : {};
+  const raw = JSON.stringify(safeState);
+  if (raw.length > 1_600_000) return { tooLarge: true };
+  const now = Date.now();
+  await d1Run(env, `
+    INSERT INTO user_state (user_id, state_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
+  `, userId, raw, now);
+  return { state: safeState, updated_at: new Date(now).toISOString() };
+}
+
+async function webOrTvIdentity(request, env) {
+  const web = await authenticateWebSession(request, env);
+  if (web) return { kind: 'web', userId: web.userId, profile: web.profile, web };
+  const tv = await authenticateTvDevice(request, env);
+  if (tv) return { kind: 'tv', userId: tv.user_id, profile: tv.profile, tv };
+  return null;
 }
 
 async function insertTvPair(env, body) {
@@ -311,66 +593,47 @@ async function insertTvPair(env, body) {
   if (!validHash(claimSecretHash) || !validHash(deviceTokenHash)) {
     return json({ error: 'invalid_pair_request', message: 'Некорректный запрос подключения.' }, 400);
   }
-
-  const expiresAt = new Date(Date.now() + TV_PAIR_TTL_SECONDS * 1000).toISOString();
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const now = Date.now();
+  const expiresAt = now + TV_PAIR_TTL_SECONDS * 1000;
+  for (let attempt = 0; attempt < 6; attempt++) {
     const code = randomCode(6);
     try {
-      const { data } = await supabaseJson(env, '/rest/v1/mvpoisk_tv_devices', {
-        method: 'POST',
-        headers: { Prefer: 'return=representation' },
-        body: JSON.stringify({
-          pair_code: code,
-          claim_secret_hash: claimSecretHash,
-          device_token_hash: deviceTokenHash,
-          device_name: deviceName,
-          status: 'pending',
-          expires_at: expiresAt,
-        }),
-      });
-      if (Array.isArray(data) && data[0]) {
-        return json({ code, displayCode: formatCode(code), expiresAt }, 201);
-      }
+      await d1Run(env, `
+        INSERT INTO tv_pairs (pair_code, claim_secret_hash, device_token_hash, device_name, status, created_at, expires_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+      `, code, claimSecretHash, deviceTokenHash, deviceName, now, expiresAt);
+      return json({ code, displayCode: formatCode(code), expiresAt: new Date(expiresAt).toISOString() }, 201);
     } catch (error) {
-      if (error.status === 409) continue;
+      if (/UNIQUE|constraint/i.test(String(error?.message || error))) continue;
       throw error;
     }
   }
   return json({ error: 'pair_code_generation_failed' }, 503);
 }
 
-async function findPair(env, code, extraQuery = '') {
+async function findPair(env, code) {
   const clean = cleanCode(code);
   if (clean.length < 6) return null;
-  const query = `/rest/v1/mvpoisk_tv_devices?pair_code=eq.${encodeURIComponent(clean)}${extraQuery}&select=id,pair_code,claim_secret_hash,device_token_hash,device_name,user_id,profile,status,expires_at,approved_at,revoked_at`;
-  const { data } = await supabaseJson(env, query, { method: 'GET' });
-  return Array.isArray(data) ? data[0] || null : null;
+  return d1First(env, 'SELECT * FROM tv_pairs WHERE pair_code = ?', clean);
 }
 
 function pairExpired(row) {
-  return !row?.expires_at || Date.parse(row.expires_at) <= Date.now();
+  return !row?.expires_at || Number(row.expires_at) <= Date.now();
 }
 
 async function approveTvPair(request, env, body) {
-  const user = await validateSupabaseUser(request, env);
-  if (!user?.id) return json({ error: 'unauthorized', message: 'Сначала войдите в MVPoisk через Telegram.' }, 401);
+  const session = await authenticateWebSession(request, env);
+  if (!session) return json({ error: 'unauthorized', message: 'Сначала войдите в MVPoisk через Telegram.' }, 401);
   const row = await findPair(env, body.code);
   if (!row || row.revoked_at) return json({ error: 'invalid_code', message: 'Код не найден.' }, 404);
   if (pairExpired(row)) return json({ error: 'expired_code', message: 'Код подключения истёк.' }, 410);
-  if (row.status === 'approved' && row.user_id && row.user_id !== user.id) return json({ error: 'already_approved' }, 409);
-
-  const now = new Date().toISOString();
-  await supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(row.id)}`, {
-    method: 'PATCH',
-    headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({
-      user_id: user.id,
-      profile: profileFromAuthUser(user),
-      status: 'approved',
-      approved_at: now,
-      last_seen_at: now,
-    }),
-  });
+  if (row.status === 'approved' && row.user_id && row.user_id !== session.userId) return json({ error: 'already_approved' }, 409);
+  const profileJson = JSON.stringify(session.profile || { name: 'Пользователь' });
+  const now = Date.now();
+  await d1Run(env, `
+    UPDATE tv_pairs SET user_id = ?, profile_json = ?, status = 'approved', approved_at = ?, last_seen_at = ?
+    WHERE pair_code = ?
+  `, session.userId, profileJson, now, now, row.pair_code);
   return json({ ok: true, status: 'approved', deviceName: row.device_name });
 }
 
@@ -378,54 +641,56 @@ async function pollTvPair(env, body) {
   const row = await findPair(env, body.code);
   if (!row || row.revoked_at) return json({ status: 'invalid' }, 404);
   const supplied = String(body.claimSecretHash || '').toLowerCase();
-  if (!validHash(supplied) || supplied !== String(row.claim_secret_hash || '').toLowerCase()) {
-    return json({ error: 'forbidden' }, 403);
-  }
+  if (!validHash(supplied) || supplied !== String(row.claim_secret_hash || '').toLowerCase()) return json({ error: 'forbidden' }, 403);
   if (row.status !== 'approved' && pairExpired(row)) return json({ status: 'expired' }, 410);
-  if (row.status !== 'approved' || !row.user_id) return json({ status: 'pending', expiresAt: row.expires_at });
-  return json({ status: 'approved', profile: row.profile || { name: 'Пользователь' }, deviceName: row.device_name });
+  if (row.status !== 'approved' || !row.user_id) return json({ status: 'pending', expiresAt: new Date(Number(row.expires_at)).toISOString() });
+  let profile = { name: 'Пользователь' };
+  try { profile = JSON.parse(row.profile_json || '{}'); } catch {}
+  return json({ status: 'approved', profile, deviceName: row.device_name });
 }
 
 async function authenticateTvDevice(request, env) {
   const header = request.headers.get('Authorization') || '';
   const match = /^Bearer\s+(mvptv_[A-Za-z0-9_-]{20,})$/i.exec(header);
-  if (!match) return null;
+  if (!match || !d1Configured(env)) return null;
   const tokenHash = await sha256Hex(match[1]);
-  const path = `/rest/v1/mvpoisk_tv_devices?device_token_hash=eq.${tokenHash}&status=eq.approved&revoked_at=is.null&select=id,user_id,device_name,profile,status,revoked_at`;
-  const { data } = await supabaseJson(env, path, { method: 'GET' });
-  const row = Array.isArray(data) ? data[0] : null;
+  const row = await d1First(env, `
+    SELECT * FROM tv_pairs
+    WHERE device_token_hash = ? AND status = 'approved' AND revoked_at IS NULL
+  `, tokenHash);
   if (!row?.user_id) return null;
-  // Best-effort activity timestamp; do not block the main request if it fails.
-  supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(row.id)}`, {
-    method: 'PATCH',
-    headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({ last_seen_at: new Date().toISOString() }),
-  }).catch(() => {});
-  return row;
+  d1Run(env, 'UPDATE tv_pairs SET last_seen_at = ? WHERE pair_code = ?', Date.now(), row.pair_code).catch(() => {});
+  let profile = { name: 'Пользователь' };
+  try { profile = JSON.parse(row.profile_json || '{}'); } catch {}
+  return { ...row, profile };
 }
 
-async function readUserState(env, userId) {
-  const { data } = await supabaseJson(env, `/rest/v1/mvpoisk_user_state?user_id=eq.${encodeURIComponent(userId)}&select=state,updated_at`, { method: 'GET' });
-  return Array.isArray(data) ? data[0] || null : null;
-}
-
-async function writeUserState(env, userId, state) {
-  const safeState = state && typeof state === 'object' ? state : {};
-  const raw = JSON.stringify(safeState);
-  if (raw.length > 1_600_000) return { tooLarge: true };
-  const { data } = await supabaseJson(env, '/rest/v1/mvpoisk_user_state?on_conflict=user_id', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify({ user_id: userId, state: safeState }),
-  });
-  return Array.isArray(data) ? data[0] || null : data;
-}
-
-async function handleAuth(request, env, incoming) {
-  if (!authConfigured(env)) return json({ error: 'auth_not_configured', message: 'Supabase secrets are not configured on the Worker.' }, 503);
+async function handleAuth(request, env, incoming, ctx) {
   const path = incoming.pathname;
-
   try {
+    if (path === '/auth/telegram/start' && request.method === 'GET') {
+      ctx?.waitUntil(cleanupAuthRows(env));
+      return createTelegramAuth(request, env, incoming);
+    }
+    if (path === '/auth/telegram/callback' && request.method === 'GET') {
+      return telegramCallback(request, env, incoming);
+    }
+    if (!d1Configured(env)) return json({ error: 'd1_not_configured', message: 'D1 binding DB is not configured.' }, 503);
+
+    if (path === '/auth/session/exchange' && request.method === 'POST') {
+      return exchangeHandoff(env, await readJsonBody(request));
+    }
+    if (path === '/auth/me' && request.method === 'GET') {
+      const session = await authenticateWebSession(request, env);
+      if (!session) return json({ error: 'unauthorized' }, 401);
+      return json({ ok: true, profile: session.profile, expiresAt: new Date(Number(session.row.expires_at)).toISOString() });
+    }
+    if (path === '/auth/profile' && request.method === 'PUT') {
+      return updateWebProfile(request, env, await readJsonBody(request));
+    }
+    if (path === '/auth/logout' && request.method === 'POST') {
+      return logoutWeb(request, env);
+    }
     if (path === '/auth/tv/pair/start' && request.method === 'POST') {
       return insertTvPair(env, await readJsonBody(request));
     }
@@ -438,33 +703,43 @@ async function handleAuth(request, env, incoming) {
 
     const device = await authenticateTvDevice(request, env);
     if (!device) return json({ error: 'unauthorized', message: 'TV-сессия недействительна.' }, 401);
-
     if (path === '/auth/tv/me' && request.method === 'GET') {
-      return json({ ok: true, profile: device.profile || { name: 'Пользователь' }, deviceName: device.device_name });
+      return json({ ok: true, profile: device.profile, deviceName: device.device_name });
     }
     if (path === '/auth/tv/state' && request.method === 'GET') {
-      const row = await readUserState(env, device.user_id);
-      return json(row || null);
+      return json(await readUserState(env, device.user_id));
     }
     if (path === '/auth/tv/state' && request.method === 'PUT') {
       const body = await readJsonBody(request);
       const row = await writeUserState(env, device.user_id, body.state);
       if (row?.tooLarge) return json({ error: 'state_too_large' }, 413);
-      return json(row || { state: body.state, updated_at: new Date().toISOString() });
+      return json(row);
     }
     if (path === '/auth/tv/device' && request.method === 'DELETE') {
-      await supabaseJson(env, `/rest/v1/mvpoisk_tv_devices?id=eq.${encodeURIComponent(device.id)}`, {
-        method: 'PATCH',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({ status: 'revoked', revoked_at: new Date().toISOString() }),
-      });
+      await d1Run(env, "UPDATE tv_pairs SET status = 'revoked', revoked_at = ? WHERE pair_code = ?", Date.now(), device.pair_code);
       return json({ ok: true });
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
     console.error('MVPoisk auth worker:', error);
-    return json({ error: 'auth_backend_error', message: error?.message || 'Auth backend error' }, error?.status && error.status < 500 ? error.status : 500);
+    return json({ error: 'auth_backend_error', message: String(error?.message || error || 'Auth backend error') }, 500);
   }
+}
+
+async function handleUserApi(request, env, incoming) {
+  if (!d1Configured(env)) return json({ error: 'd1_not_configured' }, 503);
+  const identity = await webOrTvIdentity(request, env);
+  if (!identity) return json({ error: 'unauthorized' }, 401);
+  if (incoming.pathname === '/user/state' && request.method === 'GET') {
+    return json(await readUserState(env, identity.userId));
+  }
+  if (incoming.pathname === '/user/state' && request.method === 'PUT') {
+    const body = await readJsonBody(request);
+    const row = await writeUserState(env, identity.userId, body.state);
+    if (row?.tooLarge) return json({ error: 'state_too_large' }, 413);
+    return json(row);
+  }
+  return json({ error: 'not_found' }, 404);
 }
 
 export default {
@@ -472,32 +747,38 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
 
     const incoming = new URL(request.url);
-    if (incoming.pathname.startsWith('/auth/')) return handleAuth(request, env, incoming);
-    if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+    if (incoming.pathname.startsWith('/auth/')) return handleAuth(request, env, incoming, ctx);
+    if (incoming.pathname.startsWith('/user/')) return handleUserApi(request, env, incoming);
 
     const cache = caches.default;
     const slots = getKeySlots(env);
 
     if (incoming.pathname === '/' || incoming.pathname === '/health') {
       const status = await poolStatus(cache, slots);
+      const callback = telegramCallbackUrl(request, env);
       return json({
         ok: true,
-        service: 'MVPoisk API cache + key pool + TV auth bridge',
-        version: 36,
+        service: 'MVPoisk API cache + key pool + Cloudflare accounts',
+        version: 37,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,
         readyKeys: status.filter(item => item.state === 'ready').length,
         strategy: 'balanced pool + automatic failover',
+        d1Configured: d1Configured(env),
+        telegramConfigured: telegramConfigured(env),
         accountsConfigured: authConfigured(env),
-        tvPairing: authConfigured(env) ? 'ready' : 'needs SUPABASE_URL + SUPABASE_SECRET_KEY',
+        tvPairing: d1Configured(env) ? 'ready' : 'needs D1 binding DB',
+        telegramCallbackUrl: callback,
+        frontendUrl: allowedFrontendBases(env)[0] || DEFAULT_FRONTEND_URL,
         keys: status,
       });
     }
 
     if (!incoming.pathname.startsWith('/api/')) {
-      return json({ error: 'not_found', hint: 'Use /api/v1.4/...' }, 404);
+      return json({ error: 'not_found', hint: 'Use /api/v1.4/... or /auth/...' }, 404);
     }
+    if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 
     const upstreamPath = incoming.pathname.replace(/^\/api/, '');
     if (!/^\/v1(?:\.\d+)?\//.test(upstreamPath)) {
@@ -511,14 +792,10 @@ export default {
 
     const cached = await cache.match(cacheRequest);
     if (cached) return withCacheHeaders(cached, 'HIT', '', slots.length);
-
     if (!slots.length) return json({ error: 'no_api_key_configured' }, 500);
 
     const upstreamUrl = new URL(`${UPSTREAM_ORIGIN}${upstreamPath}`);
     upstreamUrl.search = normalizedQuery ? `?${normalizedQuery}` : '';
-
-    // Spread cache misses across the whole pool. The same request on the same
-    // day starts from the same key, which keeps distribution predictable.
     const requestIdentity = `${upstreamPath}?${normalizedQuery}`;
     const candidates = orderedSlots(slots, requestIdentity);
     const slotStates = new Map();
@@ -528,14 +805,12 @@ export default {
 
     const errors = [];
     let attempted = 0;
-
     for (const slot of candidates) {
       const currentState = slotStates.get(slot.source);
       if (currentState) {
         errors.push(`key ${slot.slot}: skipped (${currentState.kind})`);
         continue;
       }
-
       attempted++;
       let upstream;
       try {
@@ -555,12 +830,8 @@ export default {
       if (!upstream.ok) {
         const body = await smallErrorText(upstream.clone());
         const failure = classifyFailure(upstream, body);
-        if (failure) {
-          ctx.waitUntil(markSlotState(cache, slot, failure.kind, failure.cooldown, `HTTP ${upstream.status}`));
-        }
-
+        if (failure) ctx.waitUntil(markSlotState(cache, slot, failure.kind, failure.cooldown, `HTTP ${upstream.status}`));
         errors.push(`key ${slot.slot}: HTTP ${upstream.status}${failure ? ` (${failure.kind})` : ''}${body ? ` ${body}` : ''}`);
-
         if (shouldTryAnotherKey(upstream.status)) continue;
         return json({ error: 'upstream_error', status: upstream.status, details: errors }, upstream.status || 502, {
           'X-MVPoisk-Cache': 'MISS',
@@ -576,12 +847,7 @@ export default {
       headers.set('X-MVPoisk-Cache', 'MISS');
       headers.set('X-MVPoisk-Upstream-Key', String(slot.slot));
       headers.set('X-MVPoisk-Key-Pool', String(slots.length));
-
-      // If the provider exposes a remaining-quota header and it reached zero,
-      // cool the key down after successfully returning this last response.
-      if (remainingQuota(upstream) === 0) {
-        ctx.waitUntil(markSlotState(cache, slot, 'quota_exhausted', DEFAULT_QUOTA_COOLDOWN_SECONDS, 'remaining=0'));
-      }
+      if (remainingQuota(upstream) === 0) ctx.waitUntil(markSlotState(cache, slot, 'quota_exhausted', DEFAULT_QUOTA_COOLDOWN_SECONDS, 'remaining=0'));
 
       const response = new Response(upstream.body, {
         status: upstream.status,
@@ -592,8 +858,6 @@ export default {
       return response;
     }
 
-    // All currently available keys failed or are cooling down. A 429 makes the
-    // frontend use its stale local cache instead of treating this as a broken page.
     return json({
       error: 'api_key_pool_exhausted',
       configuredKeys: slots.length,

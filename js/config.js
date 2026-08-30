@@ -1,37 +1,23 @@
 // MVPoisk frontend configuration.
-// Movie data is requested through the MVPoisk Cloudflare Worker so the
-// upstream token is not exposed to every browser request and responses can
-// be shared from one cache between all visitors.
+// Movie data, Telegram auth, account sync and TV pairing are all served by
+// the MVPoisk Cloudflare Worker.
 export const CONFIG = Object.freeze({
   API_BASE: 'https://mvpoisk.cizikvpn.workers.dev/api/v1.4',
 
-  // ===== Accounts (Supabase) =====
-  // Paste ONLY the public project URL and the publishable/anon key here.
-  // Never put a service_role key in the frontend.
-  SUPABASE_URL: 'https://ymyjqczmxiimeztybdfm.supabase.co',
-  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_yo2Xpkq6Ple1w1khxpm1Nw_7xuu1y6N',
-  SUPABASE_STATE_TABLE: 'mvpoisk_user_state',
-  AUTH_REDIRECT_URL: 'https://mvcomplexsite.github.io/mvpoisk/',
-  // Telegram is configured as a Custom OIDC provider in Supabase Auth.
-  TELEGRAM_OIDC_PROVIDER: 'custom:telegram',
-  // TV pairing/state API lives on the same Cloudflare Worker as the movie API.
+  // ===== Accounts (Cloudflare Worker + D1 + Telegram OIDC) =====
+  // No Supabase keys are used in the browser anymore.
   AUTH_WORKER_BASE: 'https://mvpoisk.cizikvpn.workers.dev',
+
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
   RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',
-  // Optional reserve player supplied by the second partner. It is loaded only
-  // after the user explicitly chooses “Другой источник”.
   KINOBOX_SDK_URL: 'https://fbphdplay.top/kinobox.js',
   KINOBOX_BASE_URL: 'https://fbphdplay.top/',
   PLAYER_LOAD_TIMEOUT_MS: 15000,
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
   PAGE_SIZE: 20,
-  // Demo/free API allows only the first 10 upstream pages. Request a larger
-  // batch and split it into normal 20-item MVPoisk pages client-side.
   API_BATCH_SIZE: 240,
   API_FREE_PAGE_LIMIT: 10,
-  // Browser cache is only a second line of defence. The main shared cache is
-  // inside the Cloudflare Worker.
   CACHE_TTL_MS: 60 * 60 * 1000,
   STALE_CACHE_TTL_MS: 7 * 24 * 60 * 60 * 1000,
 });

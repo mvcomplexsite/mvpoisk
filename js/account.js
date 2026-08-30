@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js?v=36';
+import { CONFIG } from './config.js?v=37';
 import {
   exportLocalState,
   hasLocalUserData,
@@ -7,9 +7,9 @@ import {
   applyLocalState,
   clearLocalUserData,
   saveProfile,
-} from './storage.js?v=36';
+} from './storage.js?v=37';
 
-const STATE_TABLE = CONFIG.SUPABASE_STATE_TABLE || 'mvpoisk_user_state';
+const WEB_SESSION_KEY = 'mvpoisk:web-session:v1';
 const TV_DEVICE_KEY = 'mvpoisk:tv-device:v1';
 const TV_PAIRING_KEY = 'mvpoisk:tv-pairing:v1';
 const SYNCED_KEYS = new Set([
@@ -19,16 +19,14 @@ const SYNCED_KEYS = new Set([
   'mvpoisk:watch-history:v1',
 ]);
 
-let client = null;
-let clientPromise = null;
-let session = null;
+let webSession = readJson(WEB_SESSION_KEY, null);
+let tvDevice = readJson(TV_DEVICE_KEY, null);
+let tvPairing = readJson(TV_PAIRING_KEY, null, sessionStorage);
 let initialized = false;
 let initPromise = null;
 let syncTimer = null;
 let syncing = false;
 let lastSyncMessage = 'Локальные данные';
-let tvDevice = readJson(TV_DEVICE_KEY, null);
-let tvPairing = readJson(TV_PAIRING_KEY, null, sessionStorage);
 
 function readJson(key, fallback, storage = localStorage) {
   try {
@@ -60,58 +58,20 @@ export function isTvMode() {
 }
 
 export function isAccountsConfigured() {
-  return Boolean(
-    /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(String(CONFIG.SUPABASE_URL || '').trim()) &&
-    String(CONFIG.SUPABASE_PUBLISHABLE_KEY || '').trim()
-  );
+  return /^https:\/\//i.test(String(CONFIG.AUTH_WORKER_BASE || '').trim());
 }
 
 export function isTvPairingConfigured() {
-  return isAccountsConfigured() && /^https:\/\//i.test(String(CONFIG.AUTH_WORKER_BASE || '').trim());
+  return isAccountsConfigured();
 }
 
-async function getClient() {
-  if (!isAccountsConfigured()) return null;
-  if (client) return client;
-  if (!clientPromise) {
-    clientPromise = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/+esm')
-      .then(({ createClient }) => createClient(
-        String(CONFIG.SUPABASE_URL).replace(/\/$/, ''),
-        String(CONFIG.SUPABASE_PUBLISHABLE_KEY),
-        {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: true,
-            storageKey: 'mvpoisk-auth-v2',
-          },
-        }
-      ))
-      .catch(error => {
-        clientPromise = null;
-        throw error;
-      });
-  }
-  client = await clientPromise;
-  return client;
-}
-
-function identityProfile(user) {
-  if (!user) return {};
-  const identity = Array.isArray(user.identities)
-    ? user.identities.find(item => String(item?.provider || '').includes('telegram')) || user.identities[0]
-    : null;
-  const data = {
-    ...(identity?.identity_data || {}),
-    ...(user.user_metadata || {}),
-  };
-  const username = String(data.preferred_username || data.username || '').replace(/^@/, '').trim();
-  const name = String(data.name || data.full_name || data.display_name || data.given_name || username || 'Пользователь').trim();
+function profileFromSession() {
+  const profile = webSession?.profile || {};
   return {
-    name,
-    username,
-    avatarUrl: String(data.picture || data.avatar_url || '').trim(),
-    telegramId: String(data.id || data.sub || identity?.provider_id || '').trim(),
+    name: String(profile.name || 'Пользователь').trim(),
+    username: String(profile.username || '').replace(/^@/, '').trim(),
+    avatarUrl: String(profile.avatarUrl || '').trim(),
+    telegramId: String(profile.telegramId || '').trim(),
   };
 }
 
@@ -126,16 +86,15 @@ function tvProfile() {
 }
 
 export function getAccountState() {
-  const user = session?.user || null;
-  const profile = user ? identityProfile(user) : tvProfile();
-  const signedIn = Boolean(user || tvDevice?.token);
+  const profile = webSession?.token ? profileFromSession() : tvProfile();
+  const signedIn = Boolean(webSession?.token || tvDevice?.token);
   return {
     configured: isAccountsConfigured(),
     tvPairingConfigured: isTvPairingConfigured(),
     initialized,
     signedIn,
-    user,
-    isTvDevice: Boolean(!user && tvDevice?.token),
+    user: webSession?.token ? { profile: webSession.profile || {} } : null,
+    isTvDevice: Boolean(!webSession?.token && tvDevice?.token),
     tvMode: isTvMode(),
     displayName: profile.name || '',
     telegramUsername: profile.username || '',
@@ -187,12 +146,12 @@ function cloudTime(value) {
 }
 
 function hasCloudIdentity() {
-  return Boolean(session?.user || tvDevice?.token);
+  return Boolean(webSession?.token || tvDevice?.token);
 }
 
 async function workerJson(path, options = {}) {
   const base = String(CONFIG.AUTH_WORKER_BASE || '').replace(/\/$/, '');
-  if (!base) throw new Error('TV Auth Worker не настроен.');
+  if (!base) throw new Error('Cloudflare Auth Worker не настроен.');
   const response = await fetch(`${base}${path}`, {
     ...options,
     headers: {
@@ -211,6 +170,10 @@ async function workerJson(path, options = {}) {
   return data === null ? null : data;
 }
 
+function webAuthHeaders() {
+  return webSession?.token ? { Authorization: `Bearer ${webSession.token}` } : {};
+}
+
 async function fetchCloudRow() {
   if (tvDevice?.token) {
     return workerJson('/auth/tv/state', {
@@ -218,15 +181,11 @@ async function fetchCloudRow() {
       headers: { Authorization: `Bearer ${tvDevice.token}` },
     });
   }
-  const supabase = await getClient();
-  if (!supabase || !session?.user) return null;
-  const { data, error } = await supabase
-    .from(STATE_TABLE)
-    .select('state,updated_at')
-    .eq('user_id', session.user.id)
-    .maybeSingle();
-  if (error) throw error;
-  return data || null;
+  if (!webSession?.token) return null;
+  return workerJson('/user/state', {
+    method: 'GET',
+    headers: webAuthHeaders(),
+  });
 }
 
 async function writeCloudState(state) {
@@ -237,15 +196,12 @@ async function writeCloudState(state) {
       body: JSON.stringify({ state }),
     });
   }
-  const supabase = await getClient();
-  if (!supabase || !session?.user) return null;
-  const { data, error } = await supabase
-    .from(STATE_TABLE)
-    .upsert({ user_id: session.user.id, state }, { onConflict: 'user_id' })
-    .select('updated_at')
-    .single();
-  if (error) throw error;
-  return data;
+  if (!webSession?.token) return null;
+  return workerJson('/user/state', {
+    method: 'PUT',
+    headers: webAuthHeaders(),
+    body: JSON.stringify({ state }),
+  });
 }
 
 export async function pushLocalState({ quiet = false } = {}) {
@@ -314,6 +270,13 @@ export async function syncFromCloud({ quiet = false } = {}) {
     lastSyncMessage = 'Синхронизировано';
     emit({ sync: 'done' });
   } catch (error) {
+    if (error?.status === 401 && webSession?.token) {
+      webSession = null;
+      writeJson(WEB_SESSION_KEY, null);
+      lastSyncMessage = 'Сессия истекла';
+      emit({ authEvent: 'SESSION_EXPIRED' });
+      return;
+    }
     lastSyncMessage = 'Офлайн — данные сохранены на устройстве';
     emit({ sync: 'error', error });
     if (!quiet) console.warn('MVPoisk cloud sync:', error);
@@ -338,6 +301,57 @@ function installSyncListeners() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && hasCloudIdentity()) syncFromCloud({ quiet: true });
   });
+}
+
+function extractAuthFragment() {
+  if (!location.hash || !/^#(?:mv_auth|mv_auth_error)=/.test(location.hash)) return null;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const handoff = params.get('mv_auth');
+  const authError = params.get('mv_auth_error');
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  return { handoff, authError };
+}
+
+function browserDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || '';
+  return `MVPoisk Web${platform ? ` · ${String(platform).slice(0, 50)}` : ''}`;
+}
+
+async function exchangeAuthHandoff(handoff) {
+  const data = await workerJson('/auth/session/exchange', {
+    method: 'POST',
+    body: JSON.stringify({ handoff, deviceName: browserDeviceName() }),
+  });
+  webSession = {
+    token: data.token,
+    expiresAt: Date.parse(data.expiresAt || '') || (Date.now() + 30 * 24 * 60 * 60 * 1000),
+    profile: data.profile || {},
+    signedInAt: Date.now(),
+  };
+  writeJson(WEB_SESSION_KEY, webSession);
+  const name = profileFromSession().name;
+  if (name && !exportLocalState().profile?.name) saveProfile(name);
+  return webSession;
+}
+
+async function refreshWebSession() {
+  if (!webSession?.token) return;
+  try {
+    const data = await workerJson('/auth/me', { method: 'GET', headers: webAuthHeaders() });
+    webSession = {
+      ...webSession,
+      profile: data.profile || webSession.profile || {},
+      expiresAt: Date.parse(data.expiresAt || '') || webSession.expiresAt,
+    };
+    writeJson(WEB_SESSION_KEY, webSession);
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      webSession = null;
+      writeJson(WEB_SESSION_KEY, null);
+    } else {
+      throw error;
+    }
+  }
 }
 
 async function refreshTvProfile() {
@@ -367,30 +381,23 @@ export async function initAccounts() {
       emit();
       return getAccountState();
     }
-    try {
-      if (isTvMode() && tvDevice?.token) await refreshTvProfile();
 
-      const supabase = await getClient();
-      supabase.auth.onAuthStateChange((event, nextSession) => {
-        session = nextSession;
-        emit({ authEvent: event });
-        if (nextSession?.user && ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED', 'INITIAL_SESSION'].includes(event)) {
-          const profile = identityProfile(nextSession.user);
-          if (profile.name && !exportLocalState().profile?.name) saveProfile(profile.name);
-          setTimeout(() => syncFromCloud({ quiet: event !== 'SIGNED_IN' }), 0);
-        }
-      });
-      const { data, error } = await supabase.auth.getSession();
-      if (error) throw error;
-      session = data.session || null;
+    try {
+      const authFragment = extractAuthFragment();
+      if (authFragment?.authError) console.warn('Telegram auth:', authFragment.authError);
+      if (authFragment?.handoff) await exchangeAuthHandoff(authFragment.handoff);
+
+      if (isTvMode() && tvDevice?.token) await refreshTvProfile();
+      if (!isTvMode() && webSession?.token) await refreshWebSession();
+
       initialized = true;
       if (hasCloudIdentity()) lastSyncMessage = 'Синхронизация…';
-      emit();
+      emit({ authEvent: authFragment?.handoff ? 'SIGNED_IN' : 'INITIAL_SESSION' });
       if (hasCloudIdentity()) setTimeout(() => syncFromCloud({ quiet: true }), 0);
       return getAccountState();
     } catch (error) {
       initialized = true;
-      lastSyncMessage = tvDevice?.token ? 'TV подключён — облако временно недоступно' : 'Аккаунты временно недоступны';
+      lastSyncMessage = hasCloudIdentity() ? 'Аккаунт подключён — облако временно недоступно' : 'Аккаунты временно недоступны';
       emit({ error });
       console.warn('MVPoisk accounts:', error);
       return getAccountState();
@@ -401,39 +408,28 @@ export async function initAccounts() {
 
 export async function signInWithTelegram() {
   if (isTvMode()) throw new Error('На телевизоре используйте вход по коду.');
-  const supabase = await getClient();
-  if (!supabase) throw new Error('Облачные аккаунты ещё не настроены.');
-  const provider = String(CONFIG.TELEGRAM_OIDC_PROVIDER || 'custom:telegram');
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider,
-    options: {
-      redirectTo: CONFIG.AUTH_REDIRECT_URL || `${location.origin}${location.pathname}`,
-      scopes: 'openid profile',
-    },
-  });
-  if (error) throw error;
-  return data;
+  if (!isAccountsConfigured()) throw new Error('Cloudflare Auth Worker ещё не настроен.');
+  const base = String(CONFIG.AUTH_WORKER_BASE).replace(/\/$/, '');
+  const returnUrl = `${location.origin}${location.pathname}${location.search}`;
+  location.assign(`${base}/auth/telegram/start?return=${encodeURIComponent(returnUrl)}`);
 }
 
 export async function updateDisplayName(name) {
   const clean = String(name || '').trim().slice(0, 32);
   if (!clean) throw new Error('Введите имя.');
-  const supabase = await getClient();
-  if (supabase && session?.user) {
-    const { data, error } = await supabase.auth.updateUser({ data: { display_name: clean } });
-    if (error) throw error;
-    if (data?.user) session = { ...session, user: data.user };
+  if (webSession?.token) {
+    const data = await workerJson('/auth/profile', {
+      method: 'PUT',
+      headers: webAuthHeaders(),
+      body: JSON.stringify({ displayName: clean }),
+    });
+    webSession = { ...webSession, profile: data.profile || { ...(webSession.profile || {}), name: clean } };
+    writeJson(WEB_SESSION_KEY, webSession);
   }
   saveProfile(clean);
   schedulePush();
   emit();
   return clean;
-}
-
-function randomBytes(size = 24) {
-  const bytes = new Uint8Array(size);
-  crypto.getRandomValues(bytes);
-  return bytes;
 }
 
 function base64url(bytes) {
@@ -468,16 +464,12 @@ export async function beginTvPairing({ force = false } = {}) {
   const now = Date.now();
   if (!force && tvPairing?.code && Number(tvPairing.expiresAt || 0) > now + 10_000) return tvPairing;
 
-  const deviceToken = `mvptv_${base64url(randomBytes(32))}`;
-  const claimSecret = base64url(randomBytes(24));
+  const deviceToken = `mvptv_${base64url(crypto.getRandomValues(new Uint8Array(32)))}`;
+  const claimSecret = base64url(crypto.getRandomValues(new Uint8Array(24)));
   const [deviceTokenHash, claimSecretHash] = await Promise.all([sha256(deviceToken), sha256(claimSecret)]);
   const data = await workerJson('/auth/tv/pair/start', {
     method: 'POST',
-    body: JSON.stringify({
-      deviceTokenHash,
-      claimSecretHash,
-      deviceName: deviceName(),
-    }),
+    body: JSON.stringify({ deviceTokenHash, claimSecretHash, deviceName: deviceName() }),
   });
   tvPairing = {
     code: cleanPairCode(data.code),
@@ -498,11 +490,7 @@ export async function pollTvPairing() {
     body: JSON.stringify({ code: tvPairing.code, claimSecretHash: tvPairing.claimSecretHash }),
   });
   if (data.status === 'approved') {
-    tvDevice = {
-      token: tvPairing.deviceToken,
-      profile: data.profile || {},
-      pairedAt: Date.now(),
-    };
+    tvDevice = { token: tvPairing.deviceToken, profile: data.profile || {}, pairedAt: Date.now() };
     writeJson(TV_DEVICE_KEY, tvDevice);
     tvPairing = null;
     writeJson(TV_PAIRING_KEY, null, sessionStorage);
@@ -514,15 +502,14 @@ export async function pollTvPairing() {
 }
 
 export async function approveTvPairCode(code) {
-  if (!session?.user || !session?.access_token) throw new Error('Сначала войдите через Telegram.');
+  if (!webSession?.token) throw new Error('Сначала войдите через Telegram.');
   const clean = cleanPairCode(code);
   if (clean.length < 6) throw new Error('Введите код с телевизора.');
-  const data = await workerJson('/auth/tv/pair/approve', {
+  return workerJson('/auth/tv/pair/approve', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${session.access_token}` },
+    headers: webAuthHeaders(),
     body: JSON.stringify({ code: clean }),
   });
-  return data;
 }
 
 export async function signOut() {
@@ -539,12 +526,11 @@ export async function signOut() {
     tvPairing = null;
     writeJson(TV_PAIRING_KEY, null, sessionStorage);
   }
-  const supabase = await getClient();
-  if (supabase && session?.user) {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+  if (webSession?.token) {
+    try { await workerJson('/auth/logout', { method: 'POST', headers: webAuthHeaders() }); } catch {}
+    webSession = null;
+    writeJson(WEB_SESSION_KEY, null);
   }
-  session = null;
   clearLocalUserData();
   lastSyncMessage = 'Локальные данные';
   emit({ authEvent: 'SIGNED_OUT' });
