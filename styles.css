@@ -613,7 +613,7 @@ html.tv-mode .account-card{width:min(760px,calc(100% - 150px));margin:7vh auto 0
 @media(max-width:600px){.tv-link-form{grid-template-columns:1fr}.tv-link-form button{width:100%}.telegram-login-button{min-height:56px}.tv-pair-code{font-size:32px}}
 
 
-/* v39 web clean-player gateway */
+/* v40 web clean-player gateway */
 .clean-source-chooser{display:flex;flex-direction:column;gap:12px;margin:0 0 14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(9,9,15,.78)}
 .clean-source-title{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.56)}
 .clean-source-buttons{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 5px;scrollbar-width:thin}

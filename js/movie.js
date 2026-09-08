@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=39';
-import { CONFIG, getWatchUrl } from './config.js?v=39';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=39';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=39';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=40';
+import { CONFIG, getWatchUrl } from './config.js?v=40';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=40';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=40';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -368,7 +368,7 @@ function bindCleanFrameMessages() {
   window.addEventListener('message', event => {
     const data = event?.data;
     if (!data || typeof data !== 'object') return;
-    if (data.type !== 'mvpoisk-clean-frame-ready' && data.type !== 'mvpoisk-clean-frame-error') return;
+    if (!['mvpoisk-clean-frame-ready', 'mvpoisk-clean-frame-error', 'mvpoisk-clean-content-error'].includes(data.type)) return;
     const frame = [...document.querySelectorAll('#embeddedPlayerHost iframe, #alternatePlayerHost iframe')]
       .find(item => { try { return item.contentWindow === event.source; } catch { return false; } });
     if (!frame) return;
@@ -378,6 +378,9 @@ function bindCleanFrameMessages() {
     if (data.type === 'mvpoisk-clean-frame-ready') {
       frame.dataset.mvCleanGatewayReady = '1';
       return;
+    }
+    if (data.type === 'mvpoisk-clean-content-error') {
+      frame.dataset.mvCleanContentError = '1';
     }
     const original = frame.dataset.mvOriginalSrc;
     if (original && frame.dataset.mvCleanGatewayFallback !== '1') {
@@ -607,8 +610,8 @@ async function startAlternateWeb(force = false) {
     if (attemptId !== alternateAttemptId) return;
     setAlternateStarting(false);
     console.warn('[MVPoisk clean alternate player]', error);
-    host.innerHTML = '<div class="alternate-player-error"><div class="player-fail-mark">!</div><strong>Запасные источники недоступны</strong><span>Можно повторить поиск или вернуться к основному источнику.</span></div>';
-    setAlternateStatus('Не удалось получить запасные источники через Cloudflare.', 'error');
+    setAlternateStatus('Cloudflare-список недоступен — подключаем запасной плеер напрямую…', 'loading');
+    return startAlternatePlayer(force, true);
   }
 }
 
@@ -633,8 +636,8 @@ function closePlayerSection() {
   stopEmbeddedPlayer({ hide: true });
 }
 
-async function startAlternatePlayer(force = false) {
-  if (!isTVMode() && CONFIG.CLEAN_PLAYER_GATEWAY) return startAlternateWeb(force);
+async function startAlternatePlayer(force = false, bypassGateway = false) {
+  if (!bypassGateway && !isTVMode() && CONFIG.CLEAN_PLAYER_GATEWAY) return startAlternateWeb(force);
   if (!currentMovie) return;
   const { section } = playerElements();
   const { panel, host } = alternateElements();

@@ -744,10 +744,10 @@ async function handleUserApi(request, env, incoming) {
 
 
 
-// ===== v39 Web Clean Player Gateway =====
-const KINOBOX_ORIGIN = 'https://fbphdplay.top';
+// ===== v40 Web Clean Player Gateway =====
+const KINOBOX_ORIGINS = ['https://fbphdplay.top', 'https://api.kinobox.tv'];
 const CLEAN_FRAME_MAX_BYTES = 2_500_000;
-const CLEAN_RENDEX_EMBED_URL = 'https://mvcomplexsite.github.io/mvpoisk/js/rendex-clean-embed.js?v=39';
+const CLEAN_RENDEX_EMBED_URL = 'https://mvcomplexsite.github.io/mvpoisk/js/rendex-clean-embed.js?v=40';
 const RENDEX_ALLOWED_SUFFIXES = [
   'vibix.org', 'stravers.live', 'stloadi.live', 'graphicslab.io',
   'alloeclub.com', 'allohalive.com', 'allohastream.com', 'thealloha.com',
@@ -767,12 +767,16 @@ function addNoAdsParams(rawUrl) {
   return url;
 }
 
-function cleanGuardScript(originalHost) {
+function cleanGuardScript(originalHost, originalUrl, parentDomain) {
   const hostJson = JSON.stringify(String(originalHost || ''));
+  const urlJson = JSON.stringify(String(originalUrl || ''));
+  const parentJson = JSON.stringify(String(parentDomain || ''));
   return `<script>
   (()=>{
     window.__MVPOISK_CLEAN_PLAYER__=true;
     window.__MVPOISK_ORIGINAL_HOST__=${hostJson};
+    window.__MVPOISK_ORIGINAL_URL__=${urlJson};
+    window.__MVPOISK_PARENT_DOMAIN__=${parentJson};
     const badHosts=[
       'pagead2.googlesyndication.com','stats.g.doubleclick.net','adservice.google.com',
       'www.googleadservices.com','ad.doubleclick.net','ade.googlesyndication.com',
@@ -892,7 +896,7 @@ async function fetchHtmlForCleanFrame(upstreamUrl, request, kind = 'generic') {
     html = neutralizeInlineAdTags(html);
     html = patchInlineOriginalHost(html);
   }
-  const injection = `<base href="${finalUrl.toString().replace(/"/g,'&quot;')}">${cleanGuardScript(finalUrl.hostname)}`;
+  const injection = `<base href="${finalUrl.toString().replace(/"/g,'&quot;')}">${cleanGuardScript(finalUrl.hostname, finalUrl.toString(), frontend.hostname)}`;
   if (/<head\\b[^>]*>/i.test(html)) html = html.replace(/<head\\b[^>]*>/i, match => `${match}${injection}`);
   else html = `${injection}${html}`;
 
@@ -914,22 +918,34 @@ function cleanFrameError(message, status = 502) {
 
 async function fetchKinoboxSources(request, kpId) {
   const id = String(kpId || '').trim();
-  if (!/^\\d{1,12}$/.test(id)) throw new Error('invalid_kinopoisk_id');
-  const url = new URL('/api/players', KINOBOX_ORIGIN);
-  url.searchParams.set('kinopoisk', id);
-  const upstream = await fetch(url.toString(), {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': request.headers.get('User-Agent') || 'Mozilla/5.0 MVPoisk/39',
-      'Referer': `${KINOBOX_ORIGIN}/`,
-    },
-  });
-  if (!upstream.ok) throw new Error(`kinobox_http_${upstream.status}`);
-  const payload = await upstream.json();
-  let rows = Array.isArray(payload?.data) ? payload.data.filter(item => item && item.iframeUrl) : [];
-  const country = String(request.cf?.country || '').toUpperCase();
-  if (KINOBOX_OBRUT_BLOCK_COUNTRIES.has(country)) rows = rows.filter(item => String(item.type || '').toLowerCase() !== 'obrut');
-  return { payload, rows };
+  if (!/^\d{1,12}$/.test(id)) throw new Error('invalid_kinopoisk_id');
+  const failures = [];
+  for (const origin of KINOBOX_ORIGINS) {
+    try {
+      const url = new URL('/api/players', origin);
+      url.searchParams.set('kinopoisk', id);
+      const upstream = await fetch(url.toString(), {
+        redirect: 'follow',
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'User-Agent': request.headers.get('User-Agent') || 'Mozilla/5.0 MVPoisk/40',
+          'Referer': `${origin}/`,
+          'Origin': origin,
+          'Accept-Language': request.headers.get('Accept-Language') || 'ru,en;q=0.8',
+        },
+      });
+      if (!upstream.ok) throw new Error(`http_${upstream.status}`);
+      const payload = await upstream.json();
+      let rows = Array.isArray(payload?.data) ? payload.data.filter(item => item && item.iframeUrl) : [];
+      const country = String(request.cf?.country || '').toUpperCase();
+      if (KINOBOX_OBRUT_BLOCK_COUNTRIES.has(country)) rows = rows.filter(item => String(item.type || '').toLowerCase() !== 'obrut');
+      if (rows.length) return { payload, rows, origin };
+      failures.push(`${origin}:empty`);
+    } catch (error) {
+      failures.push(`${origin}:${String(error?.message || error)}`);
+    }
+  }
+  throw new Error(`kinobox_all_origins_failed:${failures.join('|').slice(0, 500)}`);
 }
 
 function publicKinoboxSource(item, index) {
@@ -973,7 +989,7 @@ async function handlePlayerGateway(request, env, incoming) {
     }
 
     if (incoming.pathname === '/player/health') {
-      return json({ ok: true, version: 39, cleanGateway: 'ready', rendexAdTags: 'disabled', kinoboxDiscovery: 'server-side' });
+      return json({ ok: true, version: 40, cleanGateway: 'recovery', rendexAdTags: 'disabled', rendexIdentityBridge: 'enabled', kinoboxDiscovery: 'server-side+browser-fallback' });
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
@@ -1000,7 +1016,7 @@ export default {
       return json({
         ok: true,
         service: 'MVPoisk API cache + key pool + Cloudflare accounts + clean player gateway',
-        version: 39,
+        version: 40,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,
@@ -1012,7 +1028,7 @@ export default {
         tvPairing: d1Configured(env) ? 'ready' : 'needs D1 binding DB',
         telegramCallbackUrl: callback,
         frontendUrl: allowedFrontendBases(env)[0] || DEFAULT_FRONTEND_URL,
-        cleanPlayerGateway: 'ready',
+        cleanPlayerGateway: 'recovery',
         keys: status,
       });
     }
@@ -1033,7 +1049,7 @@ export default {
     const cacheRequest = new Request(cacheUrl.toString(), { method: 'GET' });
 
     const cached = await cache.match(cacheRequest);
-    if (cached) return withCacheHeaders(cached, 'HIT', '', slots.length);
+    if (cached) return withCacheHeaders(cached, 'HIT', '', String(slots.length));
     if (!slots.length) return json({ error: 'no_api_key_configured' }, 500);
 
     const upstreamUrl = new URL(`${UPSTREAM_ORIGIN}${upstreamPath}`);

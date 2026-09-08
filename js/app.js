@@ -1,7 +1,7 @@
-import { CONFIG } from './config.js?v=39';
-import { getMovies, searchMovies } from './api.js?v=39';
-import { imageAttrs, bindImageFallbacks } from './images.js?v=39';
-import { getContinueWatching, dismissContinue } from './storage.js?v=39';
+import { CONFIG } from './config.js?v=40';
+import { getMovies, searchMovies } from './api.js?v=40';
+import { imageAttrs, bindImageFallbacks } from './images.js?v=40';
+import { getContinueWatching, dismissContinue } from './storage.js?v=40';
 
 const $ = selector => document.querySelector(selector);
 const grid = $('#movieGrid');
