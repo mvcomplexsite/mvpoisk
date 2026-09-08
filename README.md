@@ -1,4 +1,4 @@
-# MVPoisk v41 — Player Stability Recovery
+# MVPoisk v42 — Player Stability Recovery
 
 Restores the last known-working direct Rendex and Kinobox integrations. Cloudflare D1/Telegram accounts remain enabled. Clean Player Gateway from v39/v40 is intentionally removed from the playback path.
 

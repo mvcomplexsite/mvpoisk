@@ -611,3 +611,20 @@ html.tv-mode .account-modal{display:none!important}
 html.tv-mode .account-modal{display:block!important}html.tv-mode .account-modal[hidden]{display:none!important}html.tv-mode .nav-profile{display:inline-flex!important}html.tv-mode .nav-install{display:none!important}html.tv-mode .profile-pill{display:flex}
 html.tv-mode .account-card{width:min(760px,calc(100% - 150px));margin:7vh auto 0;padding:38px;border-radius:26px}html.tv-mode .account-card h2{font-size:34px}html.tv-mode .account-card .modal-copy{font-size:15px;line-height:1.6}html.tv-mode .account-card button:focus-visible,html.tv-mode .account-card input:focus-visible{outline:3px solid #fff;outline-offset:4px;box-shadow:0 0 0 7px rgba(157,92,255,.42)}html.tv-mode .tv-pair-code{font-size:62px;padding:28px 18px}html.tv-mode .tv-pair-steps p{font-size:14px}html.tv-mode .tv-pair-steps span{width:34px;height:34px;font-size:13px}html.tv-mode .account-fineprint{font-size:13px}html.tv-mode .account-cloud-summary span{font-size:11px}
 @media(max-width:600px){.tv-link-form{grid-template-columns:1fr}.tv-link-form button{width:100%}.telegram-login-button{min-height:56px}.tv-pair-code{font-size:32px}}
+
+/* ===== v42: desktop/mobile Kinobox-primary source selector ===== */
+.mv-web-source-shell{display:grid;gap:12px;width:100%}
+.mv-web-source-bar{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:thin;overscroll-behavior-x:contain}
+.mv-web-source-chip{flex:0 0 auto;min-height:38px;padding:0 13px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.045);color:rgba(255,255,255,.82);font:700 12px/1.2 inherit;cursor:pointer;white-space:nowrap;transition:.16s ease}
+.mv-web-source-chip:hover{border-color:rgba(177,130,255,.42);background:rgba(151,92,255,.10);color:#fff}
+.mv-web-source-chip.is-active{border-color:rgba(177,130,255,.62);background:linear-gradient(135deg,rgba(133,91,255,.24),rgba(225,94,226,.13));box-shadow:0 0 0 1px rgba(169,118,255,.10) inset;color:#fff}
+.mv-web-source-frame-wrap{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:18px;background:#050507;border:1px solid rgba(255,255,255,.08)}
+.mv-web-source-frame{display:block;width:100%;height:100%;border:0;background:#000}
+.mv-web-source-loader{position:absolute;inset:0;z-index:2;border-radius:0}
+@media(max-width:700px){
+  .mv-web-source-shell{gap:9px}
+  .mv-web-source-bar{margin:0 -2px;padding-bottom:5px}
+  .mv-web-source-chip{min-height:36px;padding:0 11px;border-radius:11px;font-size:11px}
+  .mv-web-source-frame-wrap{border-radius:14px}
+}
+.tv-mode .mv-web-source-shell{display:none!important}

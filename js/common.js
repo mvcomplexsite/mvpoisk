@@ -1,4 +1,4 @@
-import { getProfile, saveProfile, counts } from './storage.js?v=41';
+import { getProfile, saveProfile, counts } from './storage.js?v=42';
 import {
   initAccounts,
   getAccountState,
@@ -11,7 +11,7 @@ import {
   beginTvPairing,
   pollTvPairing,
   approveTvPairCode,
-} from './account.js?v=41';
+} from './account.js?v=42';
 
 let tvPollTimer = null;
 
@@ -406,7 +406,7 @@ function setupInstall() {
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { await navigator.serviceWorker.register('./sw.js?v=41'); } catch (error) { console.warn('PWA service worker:', error); }
+  try { await navigator.serviceWorker.register('./sw.js?v=42'); } catch (error) { console.warn('PWA service worker:', error); }
 }
 
 

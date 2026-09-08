@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=41';
-import { CONFIG, getWatchUrl } from './config.js?v=41';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=41';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=41';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=42';
+import { CONFIG, getWatchUrl } from './config.js?v=42';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=42';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=42';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -309,6 +309,253 @@ let alternateTimer = null;
 let alternateAttemptId = 0;
 let alternateStarting = false;
 
+// Web v42: Kinobox is the primary player on desktop/mobile. We fetch the
+// player list directly in the browser (the partner SDK does the same), remove
+// the Turbo/obrut route, prefer less ad-oriented balancers, and render our own
+// source selector. TV keeps the older integration for now.
+let webKinoboxAbort = null;
+const WEB_PLAYER_SOURCE_PREF_KEY = 'mvpoisk:web-player-source:v1';
+const WEB_SOURCE_PRIORITY = ['collaps', 'kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha'];
+const WEB_SOURCE_LOW_PRIORITY = new Set(['alloha', 'cdnmovies', 'videocdn', 'turbo', 'obrut']);
+
+function sourceKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function kinoboxPlayerApiUrl(id) {
+  const url = new URL('/api/players', CONFIG.KINOBOX_BASE_URL);
+  url.searchParams.set('kinopoisk', String(id));
+  return url.toString();
+}
+
+function normalizeKinoboxRows(payload) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.sources)
+        ? payload.sources
+        : [];
+  const seen = new Set();
+  return rows
+    .map((item, index) => {
+      const type = String(item?.type || item?.source || `Источник ${index + 1}`).trim();
+      const iframeUrl = String(item?.iframeUrl || '').trim();
+      const translations = Array.isArray(item?.translations) ? item.translations : [];
+      const quality = translations.find(t => t?.quality)?.quality || '';
+      return { raw: item, index, type, key: sourceKey(type), iframeUrl, translations, quality };
+    })
+    .filter(item => {
+      if (!/^https?:\/\//i.test(item.iframeUrl)) return false;
+      // The partner page itself removes obrut in multiple countries. For the
+      // ad-reduced MVPoisk web path we remove it everywhere and also reject the
+      // equivalent Turbo source.
+      if (item.key === 'turbo' || item.key === 'obrut' || /obrut/i.test(item.iframeUrl)) return false;
+      if (seen.has(item.iframeUrl)) return false;
+      seen.add(item.iframeUrl);
+      return true;
+    })
+    .sort((a, b) => {
+      const ai = WEB_SOURCE_PRIORITY.indexOf(a.key);
+      const bi = WEB_SOURCE_PRIORITY.indexOf(b.key);
+      const ar = ai < 0 ? 50 : ai;
+      const br = bi < 0 ? 50 : bi;
+      const al = WEB_SOURCE_LOW_PRIORITY.has(a.key) ? 20 : 0;
+      const bl = WEB_SOURCE_LOW_PRIORITY.has(b.key) ? 20 : 0;
+      return (ar + al) - (br + bl) || a.index - b.index;
+    });
+}
+
+function cleanPlayerUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    // Partner-approved ad-reduction hints. Sources that do not support these
+    // simply ignore them. No stream/signature URL is rewritten here.
+    if (!url.searchParams.has('noads')) url.searchParams.set('noads', '1');
+    if (!url.searchParams.has('onlyNoAds')) url.searchParams.set('onlyNoAds', '1');
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function webSourceLabel(item, index) {
+  const quality = item.quality ? ` · ${item.quality}` : '';
+  return `${index + 1}. ${item.type}${quality}`;
+}
+
+function mountWebKinoboxSource(host, rows, selectedIndex = 0) {
+  if (!host || !rows.length) return;
+  const index = Math.max(0, Math.min(selectedIndex, rows.length - 1));
+  const selected = rows[index];
+  try { localStorage.setItem(WEB_PLAYER_SOURCE_PREF_KEY, selected.key); } catch {}
+
+  host.innerHTML = `
+    <div class="mv-web-source-shell">
+      <div class="mv-web-source-bar" role="tablist" aria-label="Источники видео">
+        ${rows.map((item, i) => `<button type="button" class="mv-web-source-chip${i === index ? ' is-active' : ''}" data-web-source-index="${i}" title="${esc(item.type)}">${esc(webSourceLabel(item, i))}</button>`).join('')}
+      </div>
+      <div class="mv-web-source-frame-wrap">
+        <div class="embedded-player-loader mv-web-source-loader" aria-hidden="true"><div class="spinner"></div><strong>Загружаем ${esc(selected.type)}…</strong><span>Если источник не подходит, выбери другой сверху</span></div>
+        <iframe class="mv-embedded-iframe mv-web-source-frame"
+          src="${esc(cleanPlayerUrl(selected.iframeUrl))}"
+          title="${esc(`Источник ${selected.type}`)}"
+          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+          allowfullscreen
+          referrerpolicy="origin-when-cross-origin"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-downloads"></iframe>
+      </div>
+    </div>`;
+
+  const frame = host.querySelector('.mv-web-source-frame');
+  const loader = host.querySelector('.mv-web-source-loader');
+  frame?.addEventListener('load', () => {
+    loader?.remove();
+    setPlayerStarting(false);
+    setPlayerStatus(`Источник ${selected.type} подключён. Можно переключить источник над плеером.`, 'ready');
+  }, { once: true });
+
+  host.querySelectorAll('[data-web-source-index]').forEach(button => {
+    button.addEventListener('click', () => {
+      const next = Number(button.dataset.webSourceIndex || 0);
+      mountWebKinoboxSource(host, rows, next);
+    });
+  });
+}
+
+async function startWebKinoboxPrimary(force = false) {
+  if (!currentMovie) return;
+  const { section, host } = playerElements();
+  if (!section || !host) return;
+  if (playerStarting && !force) return;
+
+  stopAlternatePlayer({ hide: true });
+  recordWatchStart(currentMovie, 'primary');
+  updateWatchStateButtons();
+  setPlayerStarting(true);
+  section.hidden = false;
+  requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+  if (!force && host.querySelector('.mv-web-source-frame')) {
+    setPlayerStarting(false);
+    setPlayerStatus('Плеер уже подключён.', 'ready');
+    return;
+  }
+
+  webKinoboxAbort?.abort();
+  const controller = new AbortController();
+  webKinoboxAbort = controller;
+  const timeout = setTimeout(() => controller.abort(), Math.max(8000, CONFIG.PLAYER_LOAD_TIMEOUT_MS));
+  host.innerHTML = '<div class="embedded-player-loader"><div class="spinner"></div><strong>Ищем доступные источники…</strong><span>MVPoisk выбирает приоритетные варианты без Turbo/obrut</span></div>';
+  setPlayerStatus('Получаем список источников…', 'loading');
+
+  try {
+    const response = await fetch(kinoboxPlayerApiUrl(currentMovie.id), {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Kinobox HTTP ${response.status}`);
+    const payload = await response.json();
+    const rows = normalizeKinoboxRows(payload);
+    if (!rows.length) throw new Error('No usable Kinobox sources');
+
+    let preferred = '';
+    try { preferred = sourceKey(localStorage.getItem(WEB_PLAYER_SOURCE_PREF_KEY)); } catch {}
+    const preferredIndex = preferred ? rows.findIndex(item => item.key === preferred) : -1;
+    mountWebKinoboxSource(host, rows, preferredIndex >= 0 ? preferredIndex : 0);
+    setPlayerStatus(`Найдено ${rows.length} источников. Turbo/obrut исключён, менее рекламные варианты идут первыми.`, 'ready');
+  } catch (error) {
+    console.warn('[MVPoisk web Kinobox primary]', error);
+    setPlayerStatus('Прямой список источников недоступен — подключаем совместимый плеер.', 'loading');
+    // Browser-side SDK fallback: still avoids any Cloudflare player proxy.
+    try {
+      await loadKinoboxSdk();
+      host.replaceChildren();
+      const slot = document.createElement('div');
+      slot.className = 'mv-kinobox-slot';
+      slot.dataset.kinopoisk = String(currentMovie.id);
+      host.appendChild(slot);
+      alternateInstance = window.kinobox(slot, {
+        baseUrl: CONFIG.KINOBOX_BASE_URL,
+        search: { kinopoisk: String(currentMovie.id) },
+        menu: { enable: true, theme: 'kbt_list', format: '{N}. {S} · {T} ({Q})' },
+        params: { all: { noads: '1', onlyNoAds: '1' } },
+        notFoundMessage: 'Источники для этого фильма не найдены.',
+        events: {
+          playerLoaded(result) {
+            const count = Array.isArray(result?.data) ? result.data.filter(item => item?.iframeUrl).length : 0;
+            setPlayerStarting(false);
+            setPlayerStatus(count ? `Подключено источников: ${count}.` : 'Совместимый плеер подключён.', 'ready');
+          }
+        }
+      });
+    } catch (fallbackError) {
+      console.warn('[MVPoisk web Kinobox SDK fallback]', fallbackError);
+      setPlayerStarting(false);
+      host.innerHTML = '<div class="alternate-player-error"><div class="player-fail-mark">!</div><strong>Плеер временно недоступен</strong><span>Попробуй повторить или открыть резервный источник.</span></div>';
+      setPlayerStatus('Не удалось подключить Kinobox.', 'error');
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (webKinoboxAbort === controller) webKinoboxAbort = null;
+  }
+}
+
+async function startWebRendexFallback(force = false) {
+  if (!currentMovie) return;
+  const { section } = playerElements();
+  const { panel, host } = alternateElements();
+  if (!section || !panel || !host) return;
+  if (alternateStarting && !force) return;
+  const attemptId = ++alternateAttemptId;
+  setAlternateStarting(true);
+  section.hidden = false;
+  panel.hidden = false;
+  host.replaceChildren();
+  setAlternateStatus('Подключаем резервный Rendex…', 'loading');
+  requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+
+  host.innerHTML = `<ins class="mv-rendex-slot" data-publisher-id="${esc(CONFIG.RENDEX_PUBLISHER_ID)}" data-type="kp" data-id="${esc(currentMovie.id)}"></ins>`;
+  const scan = () => {
+    const iframe = host.querySelector('iframe');
+    if (!iframe) return false;
+    iframe.classList.add('mv-embedded-iframe');
+    iframe.setAttribute('allowfullscreen', '');
+    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
+    setAlternateStarting(false);
+    setAlternateStatus('Резервный Rendex подключён.', 'ready');
+    return true;
+  };
+  const observer = new MutationObserver(() => {
+    if (scan()) observer.disconnect();
+  });
+  observer.observe(host, { childList: true, subtree: true });
+  try {
+    await loadRendexSdk();
+    if (attemptId !== alternateAttemptId) return;
+    if (!scan() && force) {
+      const slot = host.querySelector('.mv-rendex-slot');
+      if (slot) slot.replaceWith(slot.cloneNode(true));
+    }
+    clearTimeout(alternateTimer);
+    alternateTimer = setTimeout(() => {
+      if (attemptId !== alternateAttemptId || scan()) return;
+      observer.disconnect();
+      setAlternateStarting(false);
+      setAlternateStatus('Rendex не ответил. Основной Kinobox остаётся доступен выше.', 'error');
+    }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
+  } catch (error) {
+    observer.disconnect();
+    setAlternateStarting(false);
+    console.warn('[MVPoisk Rendex fallback]', error);
+    setAlternateStatus('Rendex сейчас недоступен. Используй основной Kinobox.', 'error');
+  }
+}
+
 function playerElements() {
   return {
     section: document.querySelector('#embeddedPlayerSection'),
@@ -379,6 +626,8 @@ function markPlayerReady(iframe) {
 }
 
 function stopEmbeddedPlayer({ hide = true } = {}) {
+  webKinoboxAbort?.abort();
+  webKinoboxAbort = null;
   playerAttemptId += 1;
   playerObserver?.disconnect();
   clearTimeout(playerTimer);
@@ -477,6 +726,7 @@ function closePlayerSection() {
 }
 
 async function startAlternatePlayer(force = false) {
+  if (!isTVMode()) return startWebRendexFallback(force);
   if (!currentMovie) return;
   const { section } = playerElements();
   const { panel, host } = alternateElements();
@@ -554,6 +804,7 @@ async function startAlternatePlayer(force = false) {
 
 async function startPrimaryPlayer(force = false) {
   stopAlternatePlayer({ hide: true });
+  if (!isTVMode()) return startWebKinoboxPrimary(force);
   return startEmbeddedPlayer(force);
 }
 
@@ -791,11 +1042,11 @@ function renderMovie(movie) {
           <div>
             <span class="eyebrow">Просмотр</span>
             <h2>${esc(title)}</h2>
-            <p>${movie.isSeries ? 'Сезоны, серии и озвучки выбираются внутри плеера, если доступны.' : 'Если видео не запустилось сразу, попробуй повторить запуск или открыть запасной источник.'}</p>
+            <p>${movie.isSeries ? 'На ПК и телефоне MVPoisk сначала выбирает Kinobox. Сезоны, серии и озвучки остаются внутри выбранного источника.' : 'На ПК и телефоне MVPoisk сначала выбирает Kinobox и ставит менее рекламные источники выше.'}</p>
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
-            <button type="button" class="player-mini-button player-source-button" data-player-alternate>Другой источник</button>
+            <button type="button" class="player-mini-button player-source-button" data-player-alternate>Резервный Rendex</button>
             <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть у партнёра ↗</a>
             <button type="button" class="player-mini-button" data-player-close>Закрыть</button>
           </div>
@@ -805,17 +1056,17 @@ function renderMovie(movie) {
         <div class="alternate-player-panel" id="alternatePlayerPanel" hidden>
           <div class="alternate-player-heading">
             <div>
-              <span class="eyebrow">Запасной просмотр</span>
-              <h3>Другие источники</h3>
-              <p>Загружаются только по твоему запросу. Выбери доступный вариант внутри плеера.</p>
+              <span class="eyebrow">Резервный просмотр</span>
+              <h3>Rendex</h3>
+              <p>На ПК и телефоне используется только как резерв, если основной Kinobox не подходит.</p>
             </div>
             <div class="alternate-player-actions">
               <button type="button" class="player-mini-button" data-alternate-retry>Повторить поиск</button>
-              <button type="button" class="player-mini-button player-mini-primary" data-player-primary>Основной источник</button>
+              <button type="button" class="player-mini-button player-mini-primary" data-player-primary>Вернуться к Kinobox</button>
             </div>
           </div>
           <div class="alternate-player-host" id="alternatePlayerHost"></div>
-          <div class="embedded-player-status alternate-player-status" id="alternatePlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Запасной источник ещё не запускался.</span></div>
+          <div class="embedded-player-status alternate-player-status" id="alternatePlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Резервный Rendex ещё не запускался.</span></div>
         </div>
       </div>
     </section>
