@@ -9,9 +9,11 @@ export const CONFIG = Object.freeze({
   AUTH_WORKER_BASE: 'https://mvpoisk.cizikvpn.workers.dev',
 
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
-  RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
+  RENDEX_SDK_URL: './js/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',
   KINOBOX_SDK_URL: './js/kinobox-clean.js',
+  CLEAN_PLAYER_GATEWAY: true,
+  CLEAN_PLAYER_GATEWAY_BASE: 'https://mvpoisk.cizikvpn.workers.dev/player',
   KINOBOX_BASE_URL: 'https://fbphdplay.top/',
   PLAYER_LOAD_TIMEOUT_MS: 15000,
 
