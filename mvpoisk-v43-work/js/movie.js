@@ -1,8 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=44';
-import { CONFIG, getWatchUrl } from './config.js?v=44';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=44';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=44';
-import { mountCollapsModernPlayer } from './collaps-modern.js?v=44';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=43';
+import { CONFIG, getWatchUrl } from './config.js?v=43';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=43';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=43';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -315,7 +314,6 @@ let alternateStarting = false;
 // the Turbo/obrut route, prefer less ad-oriented balancers, and render our own
 // source selector. TV keeps the older integration for now.
 let webKinoboxAbort = null;
-let webCollapsModernSession = null;
 const WEB_PLAYER_SOURCE_PREF_KEY = 'mvpoisk:web-player-source:v1';
 const WEB_CLEAN_SOURCE_KEY = 'collaps';
 const WEB_SOURCE_PRIORITY = ['collaps', 'kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha'];
@@ -409,20 +407,17 @@ function renderCleanSourceUnavailable(host, allRows = []) {
   });
 }
 
-function stopWebCollapsModernPlayer() {
-  if (!webCollapsModernSession) return;
-  try { webCollapsModernSession.destroy?.(); } catch {}
-  webCollapsModernSession = null;
-}
+function mountWebKinoboxSource(host, rows, selectedIndex = 0) {
+  if (!host || !rows.length) return;
+  const index = Math.max(0, Math.min(selectedIndex, rows.length - 1));
+  const selected = rows[index];
+  try { localStorage.setItem(WEB_PLAYER_SOURCE_PREF_KEY, selected.key); } catch {}
 
-function mountDirectWebSourceFrame(host, rows, index, selected, message = '') {
-  stopWebCollapsModernPlayer();
   host.innerHTML = `
     <div class="mv-web-source-shell">
       <div class="mv-web-source-bar" role="tablist" aria-label="Источники видео">
         ${rows.map((item, i) => `<button type="button" class="mv-web-source-chip${i === index ? ' is-active' : ''}" data-web-source-index="${i}" title="${esc(item.type)}">${esc(webSourceLabel(item, i))}</button>`).join('')}
       </div>
-      ${message ? `<div class="mv-player-inline-note">${esc(message)}</div>` : ''}
       <div class="mv-web-source-frame-wrap">
         <div class="embedded-player-loader mv-web-source-loader" aria-hidden="true"><div class="spinner"></div><strong>Загружаем ${esc(selected.type)}…</strong><span>Если источник не подходит, выбери другой сверху</span></div>
         <iframe class="mv-embedded-iframe mv-web-source-frame"
@@ -432,28 +427,15 @@ function mountDirectWebSourceFrame(host, rows, index, selected, message = '') {
           allowfullscreen
           referrerpolicy="origin-when-cross-origin"
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-downloads"></iframe>
-        ${selected.key === WEB_CLEAN_SOURCE_KEY ? `
-        <div class="mv-collaps-controls" aria-label="Управление плеером MVPoisk">
-          <button type="button" class="mv-player-icon" data-cmd="toggle" aria-label="Воспроизвести">▶</button>
-          <button type="button" class="mv-player-icon" data-cmd="back10" aria-label="Назад на 10 секунд">−10</button>
-          <button type="button" class="mv-player-icon" data-cmd="forward10" aria-label="Вперёд на 10 секунд">+10</button>
-          <span class="mv-player-current">0:00</span>
-          <input class="mv-player-timeline" type="range" min="0" max="1" value="0" step="1" aria-label="Перемотка">
-          <span class="mv-player-duration">0:00</span>
-          <button type="button" class="mv-player-icon" data-cmd="mute" aria-label="Выключить звук">🔊</button>
-          <input class="mv-player-volume" type="range" min="0" max="1" value="1" step="0.05" aria-label="Громкость">
-          <button type="button" class="mv-player-icon" data-cmd="fullscreen" aria-label="На весь экран">⛶</button>
-        </div>` : ''}
       </div>
     </div>`;
 
   const frame = host.querySelector('.mv-web-source-frame');
   const loader = host.querySelector('.mv-web-source-loader');
-  if (selected.key === WEB_CLEAN_SOURCE_KEY) attachCollapsControls(host.querySelector('.mv-web-source-shell'), frame);
   frame?.addEventListener('load', () => {
     loader?.remove();
     setPlayerStarting(false);
-    setPlayerStatus(`Источник ${selected.type} подключён.`, 'ready');
+    setPlayerStatus(`Источник ${selected.type} подключён. Можно переключить источник над плеером.`, 'ready');
   }, { once: true });
 
   host.querySelectorAll('[data-web-source-index]').forEach(button => {
@@ -462,202 +444,6 @@ function mountDirectWebSourceFrame(host, rows, index, selected, message = '') {
       mountWebKinoboxSource(host, rows, next);
     });
   });
-}
-
-
-function formatPlayerTime(value) {
-  const total = Math.max(0, Math.floor(Number(value) || 0));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = total % 60;
-  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
-}
-
-function postPlayerApi(frame, api, set) {
-  if (!frame?.contentWindow) return;
-  const payload = { api };
-  if (set !== undefined) payload.set = set;
-  frame.contentWindow.postMessage(payload, '*');
-}
-
-function attachCollapsControls(shell, frame) {
-  if (!shell || !frame) return;
-  const controls = shell.querySelector('.mv-collaps-controls');
-  if (!controls) return;
-
-  const playBtn = controls.querySelector('[data-cmd="toggle"]');
-  const backBtn = controls.querySelector('[data-cmd="back10"]');
-  const fwdBtn = controls.querySelector('[data-cmd="forward10"]');
-  const muteBtn = controls.querySelector('[data-cmd="mute"]');
-  const fsBtn = controls.querySelector('[data-cmd="fullscreen"]');
-  const timeline = controls.querySelector('.mv-player-timeline');
-  const volume = controls.querySelector('.mv-player-volume');
-  const currentEl = controls.querySelector('.mv-player-current');
-  const durationEl = controls.querySelector('.mv-player-duration');
-
-  let current = 0;
-  let duration = 0;
-  let muted = false;
-  let playing = false;
-
-  const updateTimeUi = () => {
-    if (currentEl) currentEl.textContent = formatPlayerTime(current);
-    if (durationEl) durationEl.textContent = formatPlayerTime(duration);
-    if (timeline && duration > 0 && document.activeElement !== timeline) {
-      timeline.max = String(Math.max(1, Math.floor(duration)));
-      timeline.value = String(Math.min(duration, current));
-    }
-  };
-  const updatePlayUi = () => {
-    if (playBtn) {
-      playBtn.textContent = playing ? '❚❚' : '▶';
-      playBtn.setAttribute('aria-label', playing ? 'Пауза' : 'Воспроизвести');
-    }
-  };
-  const updateMuteUi = () => {
-    if (muteBtn) {
-      muteBtn.textContent = muted ? '🔇' : '🔊';
-      muteBtn.setAttribute('aria-label', muted ? 'Включить звук' : 'Выключить звук');
-    }
-  };
-
-  playBtn?.addEventListener('click', () => postPlayerApi(frame, 'toggle'));
-  backBtn?.addEventListener('click', () => postPlayerApi(frame, 'seek', Math.max(0, current - 10)));
-  fwdBtn?.addEventListener('click', () => postPlayerApi(frame, 'seek', current + 10));
-  muteBtn?.addEventListener('click', () => postPlayerApi(frame, muted ? 'unmute' : 'mute'));
-  fsBtn?.addEventListener('click', () => {
-    postPlayerApi(frame, 'fullscreen');
-    // Browser fallback if the embedded PlayerJS build does not expose fullscreen over postMessage.
-    if (frame.requestFullscreen) frame.requestFullscreen().catch(() => {});
-  });
-  timeline?.addEventListener('input', () => {
-    current = Number(timeline.value || 0);
-    updateTimeUi();
-  });
-  timeline?.addEventListener('change', () => postPlayerApi(frame, 'seek', Number(timeline.value || 0)));
-  volume?.addEventListener('input', () => {
-    const value = Math.max(0, Math.min(1, Number(volume.value || 0)));
-    postPlayerApi(frame, 'volume', value);
-    if (value > 0 && muted) postPlayerApi(frame, 'unmute');
-  });
-
-  const onMessage = event => {
-    if (event.source !== frame.contentWindow) return;
-    const data = event.data;
-    if (!data || typeof data !== 'object') return;
-    const ev = String(data.event || data.api || '').toLowerCase();
-    const answer = data.answer ?? data.value ?? data.data;
-    if (ev === 'time') { current = Number(answer ?? data.time ?? current) || 0; updateTimeUi(); }
-    if (ev === 'duration' || ev === 'metadata') { duration = Number(answer ?? data.duration ?? duration) || duration; updateTimeUi(); }
-    if (ev === 'play' || ev === 'userplay') { playing = true; updatePlayUi(); }
-    if (ev === 'pause' || ev === 'userpause' || ev === 'stop' || ev === 'end' || ev === 'finish') { playing = false; updatePlayUi(); }
-    if (ev === 'mute') { muted = true; updateMuteUi(); }
-    if (ev === 'unmute') { muted = false; updateMuteUi(); }
-    if (ev === 'volume') {
-      const v = Number(answer);
-      if (Number.isFinite(v) && volume && document.activeElement !== volume) volume.value = String(Math.max(0, Math.min(1, v)));
-    }
-  };
-  window.addEventListener('message', onMessage);
-
-  frame.addEventListener('load', () => {
-    setTimeout(() => {
-      ['time','duration','volume','playing'].forEach(api => postPlayerApi(frame, api));
-      // PlayerJS exposes `toolbar` to explicitly show its own toolbar as well.
-      postPlayerApi(frame, 'toolbar');
-    }, 400);
-  }, { once: true });
-
-  // Poll lightweight state because not every partner build emits every event.
-  const timer = setInterval(() => {
-    if (!document.body.contains(frame)) {
-      clearInterval(timer);
-      window.removeEventListener('message', onMessage);
-      return;
-    }
-    postPlayerApi(frame, 'time');
-    postPlayerApi(frame, 'duration');
-    postPlayerApi(frame, 'playing');
-  }, 1000);
-}
-
-function mountWebKinoboxSource(host, rows, selectedIndex = 0) {
-  if (!host || !rows.length) return;
-  const index = Math.max(0, Math.min(selectedIndex, rows.length - 1));
-  const selected = rows[index];
-  try { localStorage.setItem(WEB_PLAYER_SOURCE_PREF_KEY, selected.key); } catch {}
-  stopWebCollapsModernPlayer();
-
-  const isCollaps = selected.key === WEB_CLEAN_SOURCE_KEY || /collaps/i.test(selected.type) || /embess\.ws|delivembd\.ws/i.test(selected.iframeUrl);
-  if (!isCollaps) {
-    mountDirectWebSourceFrame(host, rows, index, selected);
-    return;
-  }
-
-  host.innerHTML = `
-    <div class="mv-web-source-shell mv-collaps-modern-shell">
-      <div class="mv-web-source-bar" role="tablist" aria-label="Источники видео">
-        ${rows.map((item, i) => `<button type="button" class="mv-web-source-chip${i === index ? ' is-active' : ''}" data-web-source-index="${i}" title="${esc(item.type)}">${esc(webSourceLabel(item, i))}</button>`).join('')}
-      </div>
-      <div class="mv-player-inline-note is-good"><span>✓</span> Collaps · расширенное управление MVPoisk</div>
-      <div class="mv-web-source-frame-wrap mv-collaps-modern-wrap">
-        <div class="embedded-player-loader mv-collaps-modern-loader" aria-hidden="true"><div class="spinner"></div><strong>Подключаем полный плеер…</strong><span>Громкость, перемотка, время, fullscreen, PiP и скорость</span></div>
-        <div class="mv-collaps-modern-host" data-collaps-modern-host></div>
-      </div>
-    </div>`;
-
-  host.querySelectorAll('[data-web-source-index]').forEach(button => {
-    button.addEventListener('click', () => {
-      const next = Number(button.dataset.webSourceIndex || 0);
-      mountWebKinoboxSource(host, rows, next);
-    });
-  });
-
-  const modernHost = host.querySelector('[data-collaps-modern-host]');
-  const loader = host.querySelector('.mv-collaps-modern-loader');
-  let fallbackStarted = false;
-  const fallbackToIframe = reason => {
-    if (fallbackStarted) return;
-    fallbackStarted = true;
-    console.warn('[MVPoisk Collaps modern fallback]', reason);
-    stopWebCollapsModernPlayer();
-    mountDirectWebSourceFrame(host, rows, index, selected, 'Расширенные элементы управления недоступны — открыт совместимый Collaps.');
-  };
-
-  mountCollapsModernPlayer({
-    container: modernHost,
-    kpId: currentMovie?.id,
-    sourceUrl: selected.iframeUrl,
-    title: currentMovie?.name || currentMovie?.alternativeName || 'MVPoisk',
-    historyEntry: currentMovie ? getHistoryEntry(currentMovie.id) : null,
-    onReady() {
-      if (fallbackStarted) return;
-      loader?.remove();
-      setPlayerStarting(false);
-      setPlayerStatus('Collaps подключён: доступны громкость, таймлайн, скорость, PiP и полный экран.', 'ready');
-    },
-    onProgress(patch) {
-      if (!currentMovie) return;
-      updatePlaybackProgress(currentMovie.id, patch);
-      updateWatchStateButtons();
-    },
-    onPlaylistItem(item) {
-      if (!currentMovie) return;
-      const patch = {};
-      if (Number.isFinite(Number(item?.season))) patch.season = Number(item.season);
-      if (Number.isFinite(Number(item?.episode))) patch.episode = Number(item.episode);
-      if (Object.keys(patch).length) updatePlaybackProgress(currentMovie.id, patch);
-    },
-    onVideoError(error) {
-      if (!fallbackStarted) fallbackToIframe(error?.message || error || 'player_error');
-    },
-  }).then(session => {
-    if (fallbackStarted || !modernHost?.isConnected) {
-      try { session?.destroy?.(); } catch {}
-      return;
-    }
-    webCollapsModernSession = session;
-  }).catch(error => fallbackToIframe(error));
 }
 
 async function startWebKinoboxPrimary(force = false) {
@@ -873,7 +659,6 @@ function markPlayerReady(iframe) {
 }
 
 function stopEmbeddedPlayer({ hide = true } = {}) {
-  stopWebCollapsModernPlayer();
   webKinoboxAbort?.abort();
   webKinoboxAbort = null;
   playerAttemptId += 1;
