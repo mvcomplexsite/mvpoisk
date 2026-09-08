@@ -742,268 +742,11 @@ async function handleUserApi(request, env, incoming) {
   return json({ error: 'not_found' }, 404);
 }
 
-
-
-// ===== v40 Web Clean Player Gateway =====
-const KINOBOX_ORIGINS = ['https://fbphdplay.top', 'https://api.kinobox.tv'];
-const CLEAN_FRAME_MAX_BYTES = 2_500_000;
-const CLEAN_RENDEX_EMBED_URL = 'https://mvcomplexsite.github.io/mvpoisk/js/rendex-clean-embed.js?v=40';
-const RENDEX_ALLOWED_SUFFIXES = [
-  'vibix.org', 'stravers.live', 'stloadi.live', 'graphicslab.io',
-  'alloeclub.com', 'allohalive.com', 'allohastream.com', 'thealloha.com',
-  'newplayjj.com', 'playjjnow.com', 'allarknow.com', 'pljjalgo.com'
-];
-const KINOBOX_OBRUT_BLOCK_COUNTRIES = new Set(['AU','CA','DE','JP','NL','ES','TR','GB','US','FR']);
-
-function hostnameAllowed(hostname, suffixes) {
-  const host = String(hostname || '').toLowerCase().replace(/\.$/, '');
-  return suffixes.some(suffix => host === suffix || host.endsWith(`.${suffix}`));
-}
-
-function addNoAdsParams(rawUrl) {
-  const url = new URL(rawUrl);
-  if (!url.searchParams.has('noads')) url.searchParams.set('noads', '1');
-  if (!url.searchParams.has('onlyNoAds')) url.searchParams.set('onlyNoAds', '1');
-  return url;
-}
-
-function cleanGuardScript(originalHost, originalUrl, parentDomain) {
-  const hostJson = JSON.stringify(String(originalHost || ''));
-  const urlJson = JSON.stringify(String(originalUrl || ''));
-  const parentJson = JSON.stringify(String(parentDomain || ''));
-  return `<script>
-  (()=>{
-    window.__MVPOISK_CLEAN_PLAYER__=true;
-    window.__MVPOISK_ORIGINAL_HOST__=${hostJson};
-    window.__MVPOISK_ORIGINAL_URL__=${urlJson};
-    window.__MVPOISK_PARENT_DOMAIN__=${parentJson};
-    const badHosts=[
-      'pagead2.googlesyndication.com','stats.g.doubleclick.net','adservice.google.com',
-      'www.googleadservices.com','ad.doubleclick.net','ade.googlesyndication.com',
-      'imasdk.googleapis.com','cdn.radiantmediatechs.com','pc.alloviewroll.com',
-      'vak345.com','spadsync.com','adstat.yandex.ru'
-    ];
-    const badPath=/(^|[\\/._?&=-])(vast|vpaid|preroll|midroll|postroll|pauseroll|adserver|adservice|advert(?:ising)?|ads?)([\\/._?&=-]|$)/i;
-    const bad=(value,body='')=>{
-      try{
-        const text=String(value&&value.url||value||'');
-        const u=new URL(text,location.href);
-        const h=u.hostname.toLowerCase();
-        if(badHosts.some(x=>h===x||h.endsWith('.'+x))) return true;
-        if(badPath.test(u.pathname+u.search)) return true;
-        if(body && badPath.test(String(body))) return true;
-      }catch{}
-      return false;
-    };
-    const emptyResponse=(url)=>{
-      const text=/vast|vpaid/i.test(String(url||''))?'<VAST version="4.1"></VAST>':'{}';
-      const type=text[0]==='<'?'application/xml':'application/json';
-      return new Response(text,{status:200,headers:{'Content-Type':type,'Cache-Control':'no-store'}});
-    };
-    const nativeFetch=window.fetch.bind(window);
-    window.fetch=(input,init={})=>bad(input,init&&init.body)?Promise.resolve(emptyResponse(input&&input.url||input)):nativeFetch(input,init);
-    const XHR=window.XMLHttpRequest;
-    if(XHR){
-      const open=XHR.prototype.open,send=XHR.prototype.send;
-      XHR.prototype.open=function(method,url,...rest){this.__mvCleanUrl=url;return open.call(this,method,url,...rest)};
-      XHR.prototype.send=function(body){
-        if(bad(this.__mvCleanUrl,body)){
-          try{return open.call(this,'GET','data:application/json,%7B%7D',true),send.call(this)}catch{return this.abort()}
-        }
-        return send.call(this,body)
-      };
-    }
-    try{window.open=()=>null}catch{}
-    const nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);
-    if(nativeBeacon) navigator.sendBeacon=(url,data)=>bad(url,data)?true:nativeBeacon(url,data);
-    const cleanNode=node=>{
-      if(!node||node.nodeType!==1)return;
-      const src=node.src||node.href||'';
-      if(src&&bad(src)){try{node.remove()}catch{}}
-    };
-    new MutationObserver(list=>list.forEach(m=>m.addedNodes.forEach(cleanNode))).observe(document.documentElement,{childList:true,subtree:true});
-    addEventListener('DOMContentLoaded',()=>{try{parent.postMessage({type:'mvpoisk-clean-frame-ready'},'*')}catch{}},{once:true});
-    addEventListener('error',()=>{},true);
-  })();
-  </script>`;
-}
-
-function replaceNamedEmbedScript(html) {
-  return html.replace(/(<script\\b[^>]*\\bsrc=["'])([^"']*\\bembed(?:\\.min)?\\.js(?:\\?[^"']*)?)(["'][^>]*>)/gi,
-    (_all, a, _src, c) => `${a}${CLEAN_RENDEX_EMBED_URL}${c}`);
-}
-
-function neutralizeInlineAdTags(html) {
-  const marker = 'async function fetchAdTags(';
-  const start = html.indexOf(marker);
-  if (start < 0) return html;
-  const brace = html.indexOf('{', start);
-  if (brace < 0) return html;
-  let level = 0;
-  let quote = '';
-  let escaped = false;
-  for (let i = brace; i < html.length; i++) {
-    const ch = html[i];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === quote) quote = '';
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
-    if (ch === '{') level++;
-    else if (ch === '}') {
-      level--;
-      if (level === 0) {
-        const fn = "async function fetchAdTags(){return {preroll:'0',midroll:[{time:0,vast:'0'},{time:0,vast:'0'}],postroll:'0'};}";
-        return html.slice(0, start) + fn + html.slice(i + 1);
-      }
-    }
-  }
-  return html;
-}
-
-function patchInlineOriginalHost(html) {
-  return html.replace(/var playerInstance,current_video_id,domain=window\\[[^\\]]+\\]\\[[^\\]]+\\],parent_domain=/,
-    "var playerInstance,current_video_id,domain=(window.__MVPOISK_ORIGINAL_HOST__||window.location.hostname),parent_domain=");
-}
-
-async function fetchHtmlForCleanFrame(upstreamUrl, request, kind = 'generic') {
-  const lengthHint = Number(request.headers.get('Content-Length') || 0);
-  if (lengthHint > CLEAN_FRAME_MAX_BYTES) throw new Error('frame_too_large');
-  const frontend = new URL(allowedFrontendBases({ AUTH_FRONTEND_URL: DEFAULT_FRONTEND_URL })[0] || DEFAULT_FRONTEND_URL);
-  const upstream = await fetch(upstreamUrl.toString(), {
-    method: 'GET',
-    redirect: 'follow',
-    headers: {
-      'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-      'User-Agent': request.headers.get('User-Agent') || 'Mozilla/5.0 MVPoisk CleanPlayer/39',
-      'Referer': frontend.toString(),
-      'Accept-Language': request.headers.get('Accept-Language') || 'ru,en;q=0.8',
-    },
-  });
-  if (!upstream.ok) throw new Error(`upstream_frame_http_${upstream.status}`);
-  const ct = String(upstream.headers.get('Content-Type') || '').toLowerCase();
-  if (ct && !ct.includes('text/html') && !ct.includes('application/xhtml')) throw new Error('frame_not_html');
-  const declared = Number(upstream.headers.get('Content-Length') || 0);
-  if (declared && declared > CLEAN_FRAME_MAX_BYTES) throw new Error('frame_too_large');
-  let html = await upstream.text();
-  if (html.length > CLEAN_FRAME_MAX_BYTES) throw new Error('frame_too_large');
-
-  const finalUrl = new URL(upstream.url || upstreamUrl.toString());
-  if (kind === 'rendex') {
-    html = replaceNamedEmbedScript(html);
-    html = neutralizeInlineAdTags(html);
-    html = patchInlineOriginalHost(html);
-  }
-  const injection = `<base href="${finalUrl.toString().replace(/"/g,'&quot;')}">${cleanGuardScript(finalUrl.hostname, finalUrl.toString(), frontend.hostname)}`;
-  if (/<head\\b[^>]*>/i.test(html)) html = html.replace(/<head\\b[^>]*>/i, match => `${match}${injection}`);
-  else html = `${injection}${html}`;
-
-  const headers = new Headers();
-  headers.set('Content-Type', 'text/html; charset=utf-8');
-  headers.set('Cache-Control', 'no-store');
-  headers.set('Referrer-Policy', 'no-referrer-when-downgrade');
-  headers.set('Permissions-Policy', 'autoplay=(self "*")');
-  return new Response(html, { status: 200, headers });
-}
-
-function cleanFrameError(message, status = 502) {
-  const safe = String(message || 'clean_frame_error').replace(/[<>&"']/g, '');
-  return new Response(`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:#000;color:#ddd;font:14px system-ui}body{display:grid;place-items:center;height:100%}</style><div>Источник временно недоступен</div><script>try{parent.postMessage({type:'mvpoisk-clean-frame-error',message:${JSON.stringify(safe)}},'*')}catch{}</script>`, {
-    status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
-}
-
-async function fetchKinoboxSources(request, kpId) {
-  const id = String(kpId || '').trim();
-  if (!/^\d{1,12}$/.test(id)) throw new Error('invalid_kinopoisk_id');
-  const failures = [];
-  for (const origin of KINOBOX_ORIGINS) {
-    try {
-      const url = new URL('/api/players', origin);
-      url.searchParams.set('kinopoisk', id);
-      const upstream = await fetch(url.toString(), {
-        redirect: 'follow',
-        headers: {
-          'Accept': 'application/json, text/plain, */*',
-          'User-Agent': request.headers.get('User-Agent') || 'Mozilla/5.0 MVPoisk/40',
-          'Referer': `${origin}/`,
-          'Origin': origin,
-          'Accept-Language': request.headers.get('Accept-Language') || 'ru,en;q=0.8',
-        },
-      });
-      if (!upstream.ok) throw new Error(`http_${upstream.status}`);
-      const payload = await upstream.json();
-      let rows = Array.isArray(payload?.data) ? payload.data.filter(item => item && item.iframeUrl) : [];
-      const country = String(request.cf?.country || '').toUpperCase();
-      if (KINOBOX_OBRUT_BLOCK_COUNTRIES.has(country)) rows = rows.filter(item => String(item.type || '').toLowerCase() !== 'obrut');
-      if (rows.length) return { payload, rows, origin };
-      failures.push(`${origin}:empty`);
-    } catch (error) {
-      failures.push(`${origin}:${String(error?.message || error)}`);
-    }
-  }
-  throw new Error(`kinobox_all_origins_failed:${failures.join('|').slice(0, 500)}`);
-}
-
-function publicKinoboxSource(item, index) {
-  const translations = Array.isArray(item?.translations) ? item.translations.slice(0, 12).map(t => ({
-    name: String(t?.name || '').slice(0, 120),
-    quality: String(t?.quality || '').slice(0, 40),
-  })) : [];
-  return { index, type: String(item?.type || '').slice(0, 80), translations };
-}
-
-async function handlePlayerGateway(request, env, incoming) {
-  try {
-    if (incoming.pathname === '/player/rendex/frame' && request.method === 'GET') {
-      const raw = incoming.searchParams.get('u') || '';
-      let url;
-      try { url = addNoAdsParams(raw); } catch { return cleanFrameError('invalid_frame_url', 400); }
-      if (url.protocol !== 'https:' || !hostnameAllowed(url.hostname, RENDEX_ALLOWED_SUFFIXES)) {
-        return cleanFrameError('rendex_host_not_allowed', 403);
-      }
-      return await fetchHtmlForCleanFrame(url, request, 'rendex');
-    }
-
-    if (incoming.pathname === '/player/kinobox/sources' && request.method === 'GET') {
-      const { rows } = await fetchKinoboxSources(request, incoming.searchParams.get('kp'));
-      return json({ ok: true, sources: rows.map(publicKinoboxSource), count: rows.length }, 200, {
-        'Cache-Control': 'public, max-age=60, s-maxage=300',
-      });
-    }
-
-    if (incoming.pathname === '/player/kinobox/frame' && request.method === 'GET') {
-      const kp = incoming.searchParams.get('kp');
-      const index = Number(incoming.searchParams.get('i') || 0);
-      if (!Number.isInteger(index) || index < 0 || index > 20) return cleanFrameError('invalid_source_index', 400);
-      const { rows } = await fetchKinoboxSources(request, kp);
-      const selected = rows[index];
-      if (!selected?.iframeUrl) return cleanFrameError('source_not_found', 404);
-      let url;
-      try { url = addNoAdsParams(selected.iframeUrl); } catch { return cleanFrameError('invalid_source_url', 502); }
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') return cleanFrameError('unsupported_source_protocol', 403);
-      return await fetchHtmlForCleanFrame(url, request, 'generic');
-    }
-
-    if (incoming.pathname === '/player/health') {
-      return json({ ok: true, version: 40, cleanGateway: 'recovery', rendexAdTags: 'disabled', rendexIdentityBridge: 'enabled', kinoboxDiscovery: 'server-side+browser-fallback' });
-    }
-    return json({ error: 'not_found' }, 404);
-  } catch (error) {
-    console.error('MVPoisk player gateway:', error);
-    if (incoming.pathname.endsWith('/frame')) return cleanFrameError(error?.message || error, 502);
-    return json({ error: 'player_gateway_error', message: String(error?.message || error || 'Player gateway error') }, 502);
-  }
-}
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
 
     const incoming = new URL(request.url);
-    if (incoming.pathname.startsWith('/player/')) return handlePlayerGateway(request, env, incoming);
     if (incoming.pathname.startsWith('/auth/')) return handleAuth(request, env, incoming, ctx);
     if (incoming.pathname.startsWith('/user/')) return handleUserApi(request, env, incoming);
 
@@ -1015,8 +758,8 @@ export default {
       const callback = telegramCallbackUrl(request, env);
       return json({
         ok: true,
-        service: 'MVPoisk API cache + key pool + Cloudflare accounts + clean player gateway',
-        version: 40,
+        service: 'MVPoisk API cache + key pool + Cloudflare accounts',
+        version: 41,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,
@@ -1028,13 +771,12 @@ export default {
         tvPairing: d1Configured(env) ? 'ready' : 'needs D1 binding DB',
         telegramCallbackUrl: callback,
         frontendUrl: allowedFrontendBases(env)[0] || DEFAULT_FRONTEND_URL,
-        cleanPlayerGateway: 'recovery',
         keys: status,
       });
     }
 
     if (!incoming.pathname.startsWith('/api/')) {
-      return json({ error: 'not_found', hint: 'Use /api/v1.4/..., /auth/... or /player/...' }, 404);
+      return json({ error: 'not_found', hint: 'Use /api/v1.4/... or /auth/...' }, 404);
     }
     if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 

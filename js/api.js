@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js?v=40';
+import { CONFIG } from './config.js?v=41';
 
 const memoryCache = new Map();
 const fallbackMemory = new Map();

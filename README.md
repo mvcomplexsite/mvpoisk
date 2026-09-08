@@ -1,22 +1,17 @@
-# MVPoisk v40 — Cloudflare Accounts + Web Clean Player Gateway
+# MVPoisk v41 — Player Stability Recovery
 
-v40 сохраняет Cloudflare D1 + Telegram Accounts из v37/v38 и меняет только web-путь плееров (ПК/телефон).
+Restores the last known-working direct Rendex and Kinobox integrations. Cloudflare D1/Telegram accounts remain enabled. Clean Player Gateway from v39/v40 is intentionally removed from the playback path.
 
-Что нового:
+# MVPoisk v37 — Cloudflare Accounts
 
-- Rendex SDK хранится локально в `js/rendex-sdk.min.js`, чтобы страница не зависела от загрузки SDK с `graphicslab.io`.
-- Для web основной iframe проходит через `/player/rendex/frame` на нашем Worker.
-- В разрешённой партнёром копии `embed.js` функция `fetchAdTags()` возвращает нулевые `preroll/midroll/postroll`, остальная логика контента/серий/озвучек не менялась.
-- Clean-frame дополнительно блокирует известные VAST/ad network запросы и popup/top-navigation.
-- Kinobox сначала пробует получить список источников через Worker; если upstream не отвечает Cloudflare, MVPoisk автоматически возвращается к проверенной браузерной Kinobox-интеграции, чтобы запасной просмотр не оставался сломанным.
-- Android TV оставлен на прежней ветке, чтобы не ломать текущий APK.
+v37 убирает Supabase из MVPoisk. Telegram Login, собственные web-сессии, синхронизация пользовательских данных и TV pairing работают через существующий Cloudflare Worker + Cloudflare D1.
 
 Основные файлы:
 
-- `worker/worker.js` — Worker v40: PoiskKino key pool + Telegram/D1 + clean player gateway.
-- `js/rendex-sdk.min.js` — локальная партнёрская SDK-копия.
-- `js/rendex-clean-embed.js` — партнёрский embed с отключённым получением рекламных тегов.
-- `js/movie.js` — переключение web плееров через gateway.
-- `WEB-CLEAN-PLAYER-V40.md` — изменения recovery-ветки clean-player.
+- `worker/worker.js` — Worker v37: PoiskKino key pool + Telegram OIDC + D1 + TV pairing.
+- `cloudflare/schema.sql` — схема D1.
+- `CLOUDFLARE-ACCOUNTS-SETUP.md` — пошаговая настройка.
+- `js/account.js` — frontend auth/sync без Supabase SDK.
+- `js/config.js` — публичная конфигурация сайта.
 
-Порядок деплоя: сначала Worker v40, затем файлы сайта v40. Если clean Rendex не проходит партнёрские проверки домена/подписи, frontend автоматически возвращает оригинальный рабочий iframe; это fallback для доступности, а не гарантия отсутствия рекламы в fallback-режиме.
+Плееры Rendex/Kinobox и существующая TV-логика не менялись этой версией.

@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=40';
-import { CONFIG, getWatchUrl } from './config.js?v=40';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=40';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=40';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=41';
+import { CONFIG, getWatchUrl } from './config.js?v=41';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=41';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=41';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -359,78 +359,11 @@ function setPlayerStarting(value) {
   if (label) label.textContent = value ? 'Подключаем…' : watchButtonLabel();
 }
 
-let cleanFrameListenerBound = false;
-const cleanFrameFallbacks = new WeakMap();
-
-function bindCleanFrameMessages() {
-  if (cleanFrameListenerBound) return;
-  cleanFrameListenerBound = true;
-  window.addEventListener('message', event => {
-    const data = event?.data;
-    if (!data || typeof data !== 'object') return;
-    if (!['mvpoisk-clean-frame-ready', 'mvpoisk-clean-frame-error', 'mvpoisk-clean-content-error'].includes(data.type)) return;
-    const frame = [...document.querySelectorAll('#embeddedPlayerHost iframe, #alternatePlayerHost iframe')]
-      .find(item => { try { return item.contentWindow === event.source; } catch { return false; } });
-    if (!frame) return;
-    const timer = cleanFrameFallbacks.get(frame);
-    if (timer) clearTimeout(timer);
-    cleanFrameFallbacks.delete(frame);
-    if (data.type === 'mvpoisk-clean-frame-ready') {
-      frame.dataset.mvCleanGatewayReady = '1';
-      return;
-    }
-    if (data.type === 'mvpoisk-clean-content-error') {
-      frame.dataset.mvCleanContentError = '1';
-    }
-    const original = frame.dataset.mvOriginalSrc;
-    if (original && frame.dataset.mvCleanGatewayFallback !== '1') {
-      frame.dataset.mvCleanGatewayFallback = '1';
-      frame.src = original;
-    }
-  });
-}
-
-function applyWebCleanPlayerMode(iframe, kind = 'rendex') {
-  if (!iframe || isTVMode() || !CONFIG.WEB_CLEAN_PLAYER) return;
-  bindCleanFrameMessages();
-
-  // Prevent popups/top-navigation even if a source still tries to open an ad click.
-  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
-
-  if (iframe.dataset.mvCleanParamsApplied === '1') return;
-  try {
-    const url = new URL(iframe.src, location.href);
-    for (const [key, value] of Object.entries(CONFIG.WEB_CLEAN_PLAYER_PARAMS || {})) {
-      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
-    }
-    iframe.dataset.mvCleanParamsApplied = '1';
-    iframe.dataset.mvOriginalSrc = url.toString();
-
-    // Primary Rendex gets a same-origin clean bootstrap through Cloudflare. The
-    // Worker rewrites its embed script to MVPoisk's partner-authorized no-ad build.
-    if (kind === 'rendex' && CONFIG.CLEAN_PLAYER_GATEWAY) {
-      const gateway = `${CONFIG.CLEAN_PLAYER_GATEWAY_BASE}/rendex/frame?u=${encodeURIComponent(url.toString())}`;
-      iframe.src = gateway;
-      const timer = setTimeout(() => {
-        if (iframe.dataset.mvCleanGatewayReady === '1' || iframe.dataset.mvCleanGatewayFallback === '1') return;
-        iframe.dataset.mvCleanGatewayFallback = '1';
-        iframe.src = iframe.dataset.mvOriginalSrc || url.toString();
-      }, Math.max(9000, Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000) - 2000));
-      cleanFrameFallbacks.set(iframe, timer);
-    } else if (url.toString() !== iframe.src) {
-      iframe.src = url.toString();
-    }
-  } catch {
-    iframe.dataset.mvCleanParamsApplied = '1';
-  }
-}
-
 function markPlayerReady(iframe) {
   if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
   const { host } = playerElements();
   host?.classList.remove('player-failed');
   iframe.dataset.mvPlayerReady = '1';
-  applyWebCleanPlayerMode(iframe, 'rendex');
   iframe.classList.add('mv-embedded-iframe');
   iframe.title = currentMovie ? `Смотреть ${currentMovie.name || currentMovie.alternativeName || 'фильм'}` : 'Плеер';
   iframe.setAttribute('allowfullscreen', '');
@@ -522,99 +455,6 @@ function loadKinoboxSdk() {
   return alternateScriptPromise;
 }
 
-
-function sourceQuality(source) {
-  const translations = Array.isArray(source?.translations) ? source.translations : [];
-  return translations.find(item => item?.quality)?.quality || source?.quality || '';
-}
-
-function sourceVoice(source) {
-  const translations = Array.isArray(source?.translations) ? source.translations : [];
-  return translations.find(item => item?.name)?.name || '';
-}
-
-function renderAlternateSource(host, source, index, kpId) {
-  host.querySelectorAll('[data-clean-source]').forEach(button => {
-    button.classList.toggle('is-active', Number(button.dataset.cleanSource) === index);
-  });
-  host.querySelector('.clean-source-frame')?.remove();
-  const frame = document.createElement('iframe');
-  frame.className = 'mv-embedded-iframe clean-source-frame';
-  frame.title = `Запасной источник ${index + 1}`;
-  frame.setAttribute('allowfullscreen', '');
-  frame.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
-  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
-  frame.src = `${CONFIG.CLEAN_PLAYER_GATEWAY_BASE}/kinobox/frame?kp=${encodeURIComponent(kpId)}&i=${index}`;
-  host.appendChild(frame);
-  setAlternateStatus(`Источник ${index + 1} подключается…`, 'loading');
-  frame.addEventListener('load', () => {
-    const quality = sourceQuality(source);
-    setAlternateStatus(`Источник ${index + 1}${quality ? ` · ${quality}` : ''} загружен.`, 'ready');
-  }, { once: true });
-}
-
-async function startAlternateWeb(force = false) {
-  if (!currentMovie) return;
-  const { section } = playerElements();
-  const { panel, host } = alternateElements();
-  if (!section || !panel || !host) return;
-  if (alternateStarting && !force) return;
-
-  recordWatchStart(currentMovie, 'alternate');
-  updateWatchStateButtons();
-  const attemptId = ++alternateAttemptId;
-  setAlternateStarting(true);
-  stopEmbeddedPlayer({ hide: false });
-  section.hidden = false;
-  panel.hidden = false;
-  host.replaceChildren();
-  setAlternateStatus('Ищем чистые запасные источники…', 'loading');
-  requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
-
-  try {
-    const response = await fetch(`${CONFIG.CLEAN_PLAYER_GATEWAY_BASE}/kinobox/sources?kp=${encodeURIComponent(currentMovie.id)}`, {
-      headers: { Accept: 'application/json' },
-      cache: force ? 'reload' : 'default',
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (attemptId !== alternateAttemptId) return;
-    if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-    const sources = Array.isArray(payload?.sources) ? payload.sources : [];
-    if (!sources.length) throw new Error('Запасные источники не найдены');
-
-    const chooser = document.createElement('div');
-    chooser.className = 'clean-source-chooser';
-    const title = document.createElement('div');
-    title.className = 'clean-source-title';
-    title.textContent = 'Выбери источник';
-    chooser.appendChild(title);
-    const buttons = document.createElement('div');
-    buttons.className = 'clean-source-buttons';
-    sources.forEach((source, index) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'clean-source-button';
-      button.dataset.cleanSource = String(index);
-      const quality = sourceQuality(source);
-      const voice = sourceVoice(source);
-      button.innerHTML = `<strong>Источник ${index + 1}</strong><span>${esc([quality, voice].filter(Boolean).join(' · ') || source.type || 'Видео')}</span>`;
-      button.addEventListener('click', () => renderAlternateSource(host, source, index, currentMovie.id));
-      buttons.appendChild(button);
-    });
-    chooser.appendChild(buttons);
-    host.appendChild(chooser);
-    setAlternateStarting(false);
-    setAlternateStatus(`Найдено ${sources.length} источников. Рекламные запросы фильтруются через MVPoisk.`, 'ready');
-    renderAlternateSource(host, sources[0], 0, currentMovie.id);
-  } catch (error) {
-    if (attemptId !== alternateAttemptId) return;
-    setAlternateStarting(false);
-    console.warn('[MVPoisk clean alternate player]', error);
-    setAlternateStatus('Cloudflare-список недоступен — подключаем запасной плеер напрямую…', 'loading');
-    return startAlternatePlayer(force, true);
-  }
-}
-
 function stopAlternatePlayer({ hide = true } = {}) {
   alternateAttemptId += 1;
   clearTimeout(alternateTimer);
@@ -636,8 +476,7 @@ function closePlayerSection() {
   stopEmbeddedPlayer({ hide: true });
 }
 
-async function startAlternatePlayer(force = false, bypassGateway = false) {
-  if (!bypassGateway && !isTVMode() && CONFIG.CLEAN_PLAYER_GATEWAY) return startAlternateWeb(force);
+async function startAlternatePlayer(force = false) {
   if (!currentMovie) return;
   const { section } = playerElements();
   const { panel, host } = alternateElements();
@@ -671,9 +510,6 @@ async function startAlternatePlayer(force = false, bypassGateway = false) {
     alternateInstance = window.kinobox(slot, {
       baseUrl: CONFIG.KINOBOX_BASE_URL,
       search: { kinopoisk: String(currentMovie.id) },
-      params: !isTVMode() && CONFIG.WEB_CLEAN_PLAYER
-        ? { all: { ...(CONFIG.WEB_CLEAN_PLAYER_PARAMS || {}) } }
-        : {},
       notFoundMessage: 'Запасные источники для этого фильма не найдены.',
       events: {
         playerLoaded(result) {

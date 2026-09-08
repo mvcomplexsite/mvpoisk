@@ -9,17 +9,11 @@ export const CONFIG = Object.freeze({
   AUTH_WORKER_BASE: 'https://mvpoisk.cizikvpn.workers.dev',
 
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
-  RENDEX_SDK_URL: './js/rendex-sdk.min.js',
+  RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',
-  KINOBOX_SDK_URL: './js/kinobox-clean.js',
-  CLEAN_PLAYER_GATEWAY: true,
-  CLEAN_PLAYER_GATEWAY_BASE: 'https://mvpoisk.cizikvpn.workers.dev/player',
+  KINOBOX_SDK_URL: 'https://fbphdplay.top/kinobox.js',
   KINOBOX_BASE_URL: 'https://fbphdplay.top/',
   PLAYER_LOAD_TIMEOUT_MS: 15000,
-
-  // Web-only clean playback. Partner explicitly allowed MVPoisk to suppress ads.
-  WEB_CLEAN_PLAYER: true,
-  WEB_CLEAN_PLAYER_PARAMS: Object.freeze({ noads: '1', onlyNoAds: '1' }),
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
   PAGE_SIZE: 20,
   API_BATCH_SIZE: 240,
