@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=42';
-import { CONFIG, getWatchUrl } from './config.js?v=42';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=42';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=42';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=43';
+import { CONFIG, getWatchUrl } from './config.js?v=43';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=43';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=43';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -315,6 +315,7 @@ let alternateStarting = false;
 // source selector. TV keeps the older integration for now.
 let webKinoboxAbort = null;
 const WEB_PLAYER_SOURCE_PREF_KEY = 'mvpoisk:web-player-source:v1';
+const WEB_CLEAN_SOURCE_KEY = 'collaps';
 const WEB_SOURCE_PRIORITY = ['collaps', 'kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha'];
 const WEB_SOURCE_LOW_PRIORITY = new Set(['alloha', 'cdnmovies', 'videocdn', 'turbo', 'obrut']);
 
@@ -384,6 +385,28 @@ function webSourceLabel(item, index) {
   return `${index + 1}. ${item.type}${quality}`;
 }
 
+function cleanCollapsRows(rows) {
+  return rows.filter(item => item.key === WEB_CLEAN_SOURCE_KEY || /collaps/i.test(item.type) || /collaps/i.test(item.iframeUrl));
+}
+
+function renderCleanSourceUnavailable(host, allRows = []) {
+  if (!host) return;
+  const hasOtherSources = allRows.length > 0;
+  host.innerHTML = `
+    <div class="alternate-player-error mv-clean-source-unavailable">
+      <div class="player-fail-mark">!</div>
+      <strong>Чистый источник недоступен</strong>
+      <span>Для этого фильма Collaps сейчас не найден. MVPoisk не включает рекламные источники автоматически.</span>
+      ${hasOtherSources ? '<button type="button" class="secondary-button mv-show-ad-sources">Другие источники · возможна реклама</button>' : ''}
+    </div>`;
+  setPlayerStarting(false);
+  setPlayerStatus('Collaps для этого фильма не найден.', 'error');
+  host.querySelector('.mv-show-ad-sources')?.addEventListener('click', () => {
+    mountWebKinoboxSource(host, allRows, 0);
+    setPlayerStatus('Открыты резервные источники. На них может быть реклама.', 'ready');
+  });
+}
+
 function mountWebKinoboxSource(host, rows, selectedIndex = 0) {
   if (!host || !rows.length) return;
   const index = Math.max(0, Math.min(selectedIndex, rows.length - 1));
@@ -446,8 +469,8 @@ async function startWebKinoboxPrimary(force = false) {
   const controller = new AbortController();
   webKinoboxAbort = controller;
   const timeout = setTimeout(() => controller.abort(), Math.max(8000, CONFIG.PLAYER_LOAD_TIMEOUT_MS));
-  host.innerHTML = '<div class="embedded-player-loader"><div class="spinner"></div><strong>Ищем доступные источники…</strong><span>MVPoisk выбирает приоритетные варианты без Turbo/obrut</span></div>';
-  setPlayerStatus('Получаем список источников…', 'loading');
+  host.innerHTML = '<div class="embedded-player-loader"><div class="spinner"></div><strong>Ищем доступные источники…</strong><span>MVPoisk ищет Collaps — чистый источник</span></div>';
+  setPlayerStatus('Ищем Collaps…', 'loading');
 
   try {
     const response = await fetch(kinoboxPlayerApiUrl(currentMovie.id), {
@@ -463,11 +486,13 @@ async function startWebKinoboxPrimary(force = false) {
     const rows = normalizeKinoboxRows(payload);
     if (!rows.length) throw new Error('No usable Kinobox sources');
 
-    let preferred = '';
-    try { preferred = sourceKey(localStorage.getItem(WEB_PLAYER_SOURCE_PREF_KEY)); } catch {}
-    const preferredIndex = preferred ? rows.findIndex(item => item.key === preferred) : -1;
-    mountWebKinoboxSource(host, rows, preferredIndex >= 0 ? preferredIndex : 0);
-    setPlayerStatus(`Найдено ${rows.length} источников. Turbo/obrut исключён, менее рекламные варианты идут первыми.`, 'ready');
+    const cleanRows = cleanCollapsRows(rows);
+    if (cleanRows.length) {
+      mountWebKinoboxSource(host, cleanRows, 0);
+      setPlayerStatus('Подключён Collaps — основной источник без замеченной рекламы.', 'ready');
+    } else {
+      renderCleanSourceUnavailable(host, rows);
+    }
   } catch (error) {
     console.warn('[MVPoisk web Kinobox primary]', error);
     setPlayerStatus('Прямой список источников недоступен — подключаем совместимый плеер.', 'loading');
@@ -476,20 +501,28 @@ async function startWebKinoboxPrimary(force = false) {
       await loadKinoboxSdk();
       host.replaceChildren();
       const slot = document.createElement('div');
-      slot.className = 'mv-kinobox-slot';
+      slot.className = 'mv-kinobox-slot mv-kinobox-probe';
       slot.dataset.kinopoisk = String(currentMovie.id);
+      slot.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
       host.appendChild(slot);
       alternateInstance = window.kinobox(slot, {
         baseUrl: CONFIG.KINOBOX_BASE_URL,
         search: { kinopoisk: String(currentMovie.id) },
-        menu: { enable: true, theme: 'kbt_list', format: '{N}. {S} · {T} ({Q})' },
+        menu: { enable: false },
         params: { all: { noads: '1', onlyNoAds: '1' } },
         notFoundMessage: 'Источники для этого фильма не найдены.',
         events: {
           playerLoaded(result) {
-            const count = Array.isArray(result?.data) ? result.data.filter(item => item?.iframeUrl).length : 0;
-            setPlayerStarting(false);
-            setPlayerStatus(count ? `Подключено источников: ${count}.` : 'Совместимый плеер подключён.', 'ready');
+            const rows = normalizeKinoboxRows(result);
+            const cleanRows = cleanCollapsRows(rows);
+            try { alternateInstance?.$destroy?.(); } catch {}
+            alternateInstance = null;
+            if (cleanRows.length) {
+              mountWebKinoboxSource(host, cleanRows, 0);
+              setPlayerStatus('Подключён Collaps — основной источник без замеченной рекламы.', 'ready');
+            } else {
+              renderCleanSourceUnavailable(host, rows);
+            }
           }
         }
       });
