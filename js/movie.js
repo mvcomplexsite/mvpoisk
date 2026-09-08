@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=37';
-import { CONFIG, getWatchUrl } from './config.js?v=37';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=37';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=37';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=38';
+import { CONFIG, getWatchUrl } from './config.js?v=38';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=38';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=38';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -359,11 +359,32 @@ function setPlayerStarting(value) {
   if (label) label.textContent = value ? 'Подключаем…' : watchButtonLabel();
 }
 
+function applyWebCleanPlayerMode(iframe) {
+  if (!iframe || isTVMode() || !CONFIG.WEB_CLEAN_PLAYER) return;
+
+  // Keep partner playback/scripts working, but do not allow the embedded page to
+  // open ad popups or navigate the MVPoisk tab away from the movie page.
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
+
+  if (iframe.dataset.mvCleanParamsApplied === '1') return;
+  try {
+    const url = new URL(iframe.src, location.href);
+    for (const [key, value] of Object.entries(CONFIG.WEB_CLEAN_PLAYER_PARAMS || {})) {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    }
+    iframe.dataset.mvCleanParamsApplied = '1';
+    if (url.toString() !== iframe.src) iframe.src = url.toString();
+  } catch {
+    iframe.dataset.mvCleanParamsApplied = '1';
+  }
+}
+
 function markPlayerReady(iframe) {
   if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
   const { host } = playerElements();
   host?.classList.remove('player-failed');
   iframe.dataset.mvPlayerReady = '1';
+  applyWebCleanPlayerMode(iframe);
   iframe.classList.add('mv-embedded-iframe');
   iframe.title = currentMovie ? `Смотреть ${currentMovie.name || currentMovie.alternativeName || 'фильм'}` : 'Плеер';
   iframe.setAttribute('allowfullscreen', '');
@@ -510,6 +531,9 @@ async function startAlternatePlayer(force = false) {
     alternateInstance = window.kinobox(slot, {
       baseUrl: CONFIG.KINOBOX_BASE_URL,
       search: { kinopoisk: String(currentMovie.id) },
+      params: !isTVMode() && CONFIG.WEB_CLEAN_PLAYER
+        ? { all: { ...(CONFIG.WEB_CLEAN_PLAYER_PARAMS || {}) } }
+        : {},
       notFoundMessage: 'Запасные источники для этого фильма не найдены.',
       events: {
         playerLoaded(result) {
