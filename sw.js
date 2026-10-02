@@ -1,8 +1,8 @@
-const CACHE = 'mvpoisk-shell-v46';
+const CACHE = 'mvpoisk-shell-v47';
 const SHELL = [
-  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=46',
-  './js/config.js?v=46', './js/api.js?v=46', './js/images.js?v=46', './js/storage.js?v=46',
-  './js/common.js?v=46', './js/account.js?v=46', './js/app.js?v=46', './js/movie.js?v=46', './js/my.js?v=46', './js/tv.js?v=46',
+  './', './index.html', './movie.html', './my.html', './404.html', './styles.css?v=47',
+  './js/config.js?v=47', './js/api.js?v=47', './js/images.js?v=47', './js/storage.js?v=47',
+  './js/common.js?v=47', './js/account.js?v=47', './js/app.js?v=47', './js/movie.js?v=47', './js/my.js?v=47', './js/tv.js?v=47',
   './manifest.webmanifest',
   './icons/favicon-16.png', './icons/favicon-32.png', './icons/logo-mark-64.png', './icons/logo-mark-128.png',
   './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',

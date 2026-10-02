@@ -12,7 +12,11 @@ export const CONFIG = Object.freeze({
   MVZ_VPS_BOT_URL: 'https://t.me/mvzapretbot?start=mvpoisk',
   RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',
+  // Lightweight embedded backup used only when Rendex is unavailable or shows a blank screen.
+  KINOBOX_BASE_URL: 'https://fbphdplay.top/',
+  KINOBOX_SDK_URL: 'https://fbphdplay.top/kinobox.js',
   PLAYER_LOAD_TIMEOUT_MS: 15000,
+  BACKUP_PLAYER_TIMEOUT_MS: 12000,
   SOCIAL_ALIAS: 'MTU3OTQxNTUy',
   PAGE_SIZE: 20,
   API_BATCH_SIZE: 240,

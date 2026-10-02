@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=46';
-import { CONFIG, getWatchUrl } from './config.js?v=46';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=46';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=46';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=47';
+import { CONFIG, getWatchUrl } from './config.js?v=47';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=47';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=47';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -180,6 +180,12 @@ let playerAttemptId = 0;
 let playerStarting = false;
 let telemetryBound = false;
 let lastTelemetryWrite = 0;
+let backupAbort = null;
+let backupSources = [];
+let backupSourceIndex = -1;
+let activePlayerMode = 'primary';
+let kinoboxScriptPromise = null;
+let kinoboxProbeInstance = null;
 
 function watchButtonLabel() {
   if (!currentMovie) return 'Смотреть';
@@ -320,6 +326,239 @@ function setPlayerStatus(message, state = 'loading') {
       : `<span class="player-status-error">!</span><span>${esc(message)}</span>`;
 }
 
+
+const BACKUP_SOURCE_PRIORITY = ['kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha', 'collaps'];
+const BACKUP_SOURCE_BLOCKED = new Set(['turbo', 'obrut']);
+
+function playerSourceKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function kinoboxPlayerApiUrl(id) {
+  const url = new URL('/api/players', CONFIG.KINOBOX_BASE_URL);
+  url.searchParams.set('kinopoisk', String(id));
+  return url.toString();
+}
+
+function normalizeBackupSources(payload) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.sources)
+        ? payload.sources
+        : [];
+  const seen = new Set();
+  return rows
+    .map((item, index) => {
+      const type = String(item?.type || item?.source || `Источник ${index + 1}`).trim();
+      const iframeUrl = String(item?.iframeUrl || '').trim();
+      const key = playerSourceKey(type);
+      return { index, type, key, iframeUrl };
+    })
+    .filter(item => {
+      if (!/^https?:\/\//i.test(item.iframeUrl)) return false;
+      if (BACKUP_SOURCE_BLOCKED.has(item.key) || /obrut/i.test(item.iframeUrl)) return false;
+      if (seen.has(item.iframeUrl)) return false;
+      seen.add(item.iframeUrl);
+      return true;
+    })
+    .sort((a, b) => {
+      const ai = BACKUP_SOURCE_PRIORITY.indexOf(a.key);
+      const bi = BACKUP_SOURCE_PRIORITY.indexOf(b.key);
+      const ar = ai < 0 ? 50 : ai;
+      const br = bi < 0 ? 50 : bi;
+      return ar - br || a.index - b.index;
+    });
+}
+
+function cleanBackupPlayerUrl(rawUrl) {
+  // Keep the partner-provided iframe URL byte-for-byte. Some backup providers
+  // sign the full query string, so adding our own parameters can break playback.
+  return String(rawUrl || '');
+}
+
+function updateBackupButton() {
+  const button = document.querySelector('[data-player-backup]');
+  if (!button) return;
+  const hasMore = activePlayerMode === 'backup' && backupSources.length > 1;
+  button.textContent = hasMore ? 'Другой источник' : 'Запасной';
+  button.title = hasMore ? 'Переключить на следующий запасной источник' : 'Открыть запасной встроенный источник';
+}
+
+function mountBackupSource(host, index = 0) {
+  if (!host || !backupSources.length) return false;
+  const safeIndex = ((index % backupSources.length) + backupSources.length) % backupSources.length;
+  const source = backupSources[safeIndex];
+  backupSourceIndex = safeIndex;
+  activePlayerMode = 'backup';
+  const src = cleanBackupPlayerUrl(source.iframeUrl);
+  host.classList.remove('player-failed');
+  host.innerHTML = `
+    <div class="embedded-player-loader" aria-hidden="true">
+      <div class="spinner"></div>
+      <strong>Подключаем запасной источник…</strong>
+      <span>${esc(source.type)}</span>
+    </div>
+    <iframe class="mv-embedded-iframe mv-backup-player-frame"
+      src="${esc(src)}"
+      title="${esc(`Запасной источник ${source.type}`)}"
+      allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+      allowfullscreen
+      referrerpolicy="origin-when-cross-origin"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-popups"></iframe>`;
+  const frame = host.querySelector('.mv-backup-player-frame');
+  frame?.addEventListener('load', () => {
+    setPlayerStarting(false);
+    setPlayerStatus(`Запасной источник ${source.type} загружен. Если экран пустой — нажми «Другой источник».`, 'ready');
+    updateBackupButton();
+  }, { once: true });
+  setPlayerStatus(`Подключаем запасной источник ${source.type}…`, 'loading');
+  updateBackupButton();
+  return true;
+}
+
+
+function loadKinoboxSdk() {
+  if (typeof window.kinobox === 'function') return Promise.resolve();
+  if (kinoboxScriptPromise) return kinoboxScriptPromise;
+  kinoboxScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.dataset.mvKinoboxSdk = '1';
+    script.src = CONFIG.KINOBOX_SDK_URL;
+    script.onload = () => typeof window.kinobox === 'function'
+      ? resolve()
+      : reject(new Error('Kinobox loaded without global function'));
+    script.onerror = () => {
+      kinoboxScriptPromise = null;
+      script.remove();
+      reject(new Error('Kinobox SDK blocked or unavailable'));
+    };
+    document.head.appendChild(script);
+  });
+  return kinoboxScriptPromise;
+}
+
+async function fetchBackupSourcesViaSdk() {
+  await loadKinoboxSdk();
+  const { host } = playerElements();
+  if (!host) throw new Error('Player host missing');
+  return new Promise((resolve, reject) => {
+    const probe = document.createElement('div');
+    probe.className = 'mv-kinobox-probe';
+    probe.dataset.kinopoisk = String(currentMovie.id);
+    probe.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
+    host.appendChild(probe);
+    let settled = false;
+    const finish = (error, rows = []) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { kinoboxProbeInstance?.$destroy?.(); } catch {}
+      kinoboxProbeInstance = null;
+      probe.remove();
+      if (error) reject(error); else resolve(rows);
+    };
+    const timer = setTimeout(() => finish(new Error('Kinobox SDK timeout')), CONFIG.BACKUP_PLAYER_TIMEOUT_MS || 12000);
+    try {
+      kinoboxProbeInstance = window.kinobox(probe, {
+        baseUrl: CONFIG.KINOBOX_BASE_URL,
+        search: { kinopoisk: String(currentMovie.id) },
+        menu: { enable: false },
+        params: { all: { noads: '1', onlyNoAds: '1' } },
+        notFoundMessage: 'Источники не найдены.',
+        events: {
+          playerLoaded(result) {
+            const rows = normalizeBackupSources(result);
+            if (!rows.length) finish(new Error('Kinobox SDK returned no sources'));
+            else finish(null, rows);
+          }
+        }
+      });
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+async function fetchBackupSources() {
+  if (backupSources.length) return backupSources;
+  backupAbort?.abort();
+  const controller = new AbortController();
+  backupAbort = controller;
+  const timeout = setTimeout(() => controller.abort(), CONFIG.BACKUP_PLAYER_TIMEOUT_MS || 12000);
+  let directError = null;
+  try {
+    try {
+      const response = await fetch(kinoboxPlayerApiUrl(currentMovie.id), {
+        method: 'GET',
+        mode: 'cors',
+        credentials: 'omit',
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Backup HTTP ${response.status}`);
+      const rows = normalizeBackupSources(await response.json());
+      if (!rows.length) throw new Error('No backup sources');
+      backupSources = rows;
+      return rows;
+    } catch (error) {
+      directError = error;
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (backupAbort === controller) backupAbort = null;
+  }
+
+  try {
+    const rows = await fetchBackupSourcesViaSdk();
+    backupSources = rows;
+    return rows;
+  } catch (sdkError) {
+    console.warn('[MVPoisk backup source lookup]', directError, sdkError);
+    throw sdkError;
+  }
+}
+async function startBackupEmbeddedPlayer({ next = false, automatic = false } = {}) {
+  if (!currentMovie) return;
+  const { section, host } = playerElements();
+  if (!section || !host) return;
+
+  recordWatchStart(currentMovie, 'backup');
+  updateWatchStateButtons();
+  section.hidden = false;
+  if (isTVMode()) openTvPlayerShell('backup');
+  else if (!automatic) requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+  if (next && backupSources.length) {
+    setPlayerStarting(true);
+    mountBackupSource(host, backupSourceIndex + 1);
+    return;
+  }
+
+  setPlayerStarting(true);
+  playerObserver?.disconnect();
+  clearTimeout(playerTimer);
+  host.classList.remove('player-failed');
+  host.innerHTML = '<div class="embedded-player-loader"><div class="spinner"></div><strong>Ищем запасной источник…</strong><span>Это займёт несколько секунд</span></div>';
+  setPlayerStatus(automatic ? 'Основной плеер не ответил — ищем запасной…' : 'Ищем запасной встроенный источник…', 'loading');
+
+  try {
+    await fetchBackupSources();
+    mountBackupSource(host, 0);
+  } catch (error) {
+    console.warn('[MVPoisk backup player]', error);
+    setPlayerStarting(false);
+    activePlayerMode = 'primary';
+    host.classList.add('player-failed');
+    host.innerHTML = '<div class="embedded-player-loader"><div class="player-fail-mark">!</div><strong>Запасной источник тоже не ответил</strong><span>Открой GGPoisk — он остаётся доступен сверху</span></div>';
+    setPlayerStatus('Не удалось подключить встроенные источники. Используй GGPoisk.', 'error');
+    updateBackupButton();
+  }
+}
+
 function loadRendexSdk() {
   if (playerScriptPromise) return playerScriptPromise;
   playerScriptPromise = new Promise((resolve, reject) => {
@@ -364,16 +603,31 @@ function markPlayerReady(iframe) {
   }
   clearTimeout(playerTimer);
   setPlayerStarting(false);
-  setPlayerStatus('Плеер подключён.', 'ready');
+  activePlayerMode = 'primary';
+  updateBackupButton();
+  setPlayerStatus('Плеер подключён. Если увидишь чёрный экран — нажми «Запасной».', 'ready');
   iframe.addEventListener('load', () => {
-    setPlayerStatus('Плеер загружен. Управление качеством, сериями и озвучкой — внутри плеера, если они доступны.', 'ready');
+    let src = '';
+    try { src = String(iframe.getAttribute('src') || iframe.src || ''); } catch {}
+    if (!src || /^about:blank(?:$|[?#])/i.test(src)) {
+      setPlayerStatus('Основной плеер открыл пустой экран — подключаем запасной…', 'loading');
+      startBackupEmbeddedPlayer({ automatic: true });
+      return;
+    }
+    setPlayerStatus('Плеер загружен. Если экран остаётся чёрным — нажми «Запасной».', 'ready');
   }, { once: true });
 }
-
 function stopEmbeddedPlayer({ hide = true } = {}) {
   playerAttemptId += 1;
   playerObserver?.disconnect();
   clearTimeout(playerTimer);
+  backupAbort?.abort();
+  backupAbort = null;
+  try { kinoboxProbeInstance?.$destroy?.(); } catch {}
+  kinoboxProbeInstance = null;
+  backupSources = [];
+  backupSourceIndex = -1;
+  activePlayerMode = 'primary';
   const { section, host } = playerElements();
   if (host) {
     // Removing the cross-origin iframe is the reliable way to stop hidden audio/video.
@@ -383,6 +637,7 @@ function stopEmbeddedPlayer({ hide = true } = {}) {
   setPlayerStarting(false);
   setPlayerStatus('Плеер остановлен.', 'ready');
   if (section && hide) section.hidden = true;
+  updateBackupButton();
 }
 
 function observePlayer(host) {
@@ -429,6 +684,12 @@ async function startEmbeddedPlayer(force = false) {
   if (!section || !host) return;
 
   if (playerStarting && !force) return;
+  backupAbort?.abort();
+  backupAbort = null;
+  backupSources = [];
+  backupSourceIndex = -1;
+  activePlayerMode = 'primary';
+  updateBackupButton();
   recordWatchStart(currentMovie, 'primary');
   updateWatchStateButtons();
   const attemptId = ++playerAttemptId;
@@ -465,11 +726,8 @@ async function startEmbeddedPlayer(force = false) {
     if (attemptId !== playerAttemptId) return;
     if (!host.querySelector('iframe')) {
       playerObserver?.disconnect();
-      setPlayerStarting(false);
-      host.classList.add('player-failed');
-      const loader = host.querySelector('.embedded-player-loader');
-      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой GGPoisk</span>';
-      setPlayerStatus('Встроенный плеер не ответил. Можно повторить или открыть GGPoisk.', 'error');
+      setPlayerStatus('Основной плеер не ответил — подключаем запасной…', 'loading');
+      startBackupEmbeddedPlayer({ automatic: true });
     }
   }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
 
@@ -487,12 +745,9 @@ async function startEmbeddedPlayer(force = false) {
     if (attemptId !== playerAttemptId) return;
     clearTimeout(playerTimer);
     playerObserver?.disconnect();
-    setPlayerStarting(false);
     console.warn('[MVPoisk player]', error);
-    host.classList.add('player-failed');
-    const loader = host.querySelector('.embedded-player-loader');
-    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>GGPoisk остаётся доступен сверху</span>';
-    setPlayerStatus('Сервис встроенного плеера сейчас недоступен. Используй GGPoisk.', 'error');
+    setPlayerStatus('Основной сервис недоступен — подключаем запасной…', 'loading');
+    startBackupEmbeddedPlayer({ automatic: true });
   }
 }
 
@@ -501,6 +756,7 @@ function bindWatchAction() {
   button?.addEventListener('click', () => startPrimaryPlayer(false));
 
   document.querySelector('[data-player-retry]')?.addEventListener('click', () => startPrimaryPlayer(true));
+  document.querySelector('[data-player-backup]')?.addEventListener('click', () => startBackupEmbeddedPlayer({ next: activePlayerMode === 'backup' }));
   document.querySelectorAll('[data-player-close]').forEach(button => button.addEventListener('click', closePlayerSection));
 
   document.querySelector('[data-watch-alternate-action]')?.addEventListener('click', () => startAlternatePlayer(false));
@@ -658,6 +914,7 @@ function renderMovie(movie) {
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
+            <button type="button" class="player-mini-button player-mini-backup" data-player-backup>Запасной</button>
             <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">GGPoisk ↗</a>
             <button type="button" class="player-mini-button" data-player-close>Закрыть</button>
           </div>

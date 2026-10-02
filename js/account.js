@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js?v=46';
+import { CONFIG } from './config.js?v=47';
 import {
   exportLocalState,
   hasLocalUserData,
@@ -7,7 +7,7 @@ import {
   applyLocalState,
   clearLocalUserData,
   saveProfile,
-} from './storage.js?v=46';
+} from './storage.js?v=47';
 
 const WEB_SESSION_KEY = 'mvpoisk:web-session:v1';
 const TV_DEVICE_KEY = 'mvpoisk:tv-device:v1';
