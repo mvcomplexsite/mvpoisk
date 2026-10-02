@@ -1,4 +1,4 @@
-# MVPoisk v45
+# MVPoisk v46
 
 Production web build for MVPoisk.
 
@@ -8,7 +8,7 @@ Production web build for MVPoisk.
 - No active Kinobox source picker and no Collaps/VenomPlayer bridge.
 
 ## Backend
-- `worker/worker.js` — Cloudflare Worker v45: PoiskKino key pool/cache, Telegram OIDC, D1 sessions/state, TV pairing.
+- `worker/worker.js` — Cloudflare Worker v46: PoiskKino key pool/cache, Telegram OIDC, D1 sessions/state, TV pairing.
 - Public PoiskKino proxy is limited to the movie/search/review routes used by this frontend.
 - `cloudflare/schema.sql` — D1 schema.
 

@@ -808,7 +808,7 @@ export default {
       return json({
         ok: true,
         service: 'MVPoisk API cache + key pool + Cloudflare accounts',
-        version: 45,
+        version: 46,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,

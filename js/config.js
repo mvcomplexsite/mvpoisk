@@ -9,6 +9,7 @@ export const CONFIG = Object.freeze({
   AUTH_WORKER_BASE: 'https://mvpoisk.cizikvpn.workers.dev',
 
   GGPOISK_BASE: 'https://www.ggpoisk.ru',
+  MVZ_VPS_BOT_URL: 'https://t.me/mvzapretbot?start=mvpoisk',
   RENDEX_SDK_URL: 'https://graphicslab.io/sdk/v2/rendex-sdk.min.js',
   RENDEX_PUBLISHER_ID: '668474171',
   PLAYER_LOAD_TIMEOUT_MS: 15000,

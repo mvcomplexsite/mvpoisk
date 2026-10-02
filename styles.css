@@ -597,3 +597,29 @@ html.tv-mode .account-modal{display:none!important}
 html.tv-mode .account-modal{display:block!important}html.tv-mode .account-modal[hidden]{display:none!important}html.tv-mode .nav-profile{display:inline-flex!important}html.tv-mode .nav-install{display:none!important}html.tv-mode .profile-pill{display:flex}
 html.tv-mode .account-card{width:min(760px,calc(100% - 150px));margin:7vh auto 0;padding:38px;border-radius:26px}html.tv-mode .account-card h2{font-size:34px}html.tv-mode .account-card .modal-copy{font-size:15px;line-height:1.6}html.tv-mode .account-card button:focus-visible,html.tv-mode .account-card input:focus-visible{outline:3px solid #fff;outline-offset:4px;box-shadow:0 0 0 7px rgba(157,92,255,.42)}html.tv-mode .tv-pair-code{font-size:62px;padding:28px 18px}html.tv-mode .tv-pair-steps p{font-size:14px}html.tv-mode .tv-pair-steps span{width:34px;height:34px;font-size:13px}html.tv-mode .account-fineprint{font-size:13px}html.tv-mode .account-cloud-summary span{font-size:11px}
 @media(max-width:600px){.tv-link-form{grid-template-columns:1fr}.tv-link-form button{width:100%}.telegram-login-button{min-height:56px}.tv-pair-code{font-size:32px}}
+
+
+/* v46 — native MVZ VPS promo on the home page. */
+.mvz-promo{width:min(1180px,calc(100% - 36px));margin:-34px auto 78px}
+.mvz-promo-card{position:relative;display:grid;grid-template-columns:250px minmax(0,1fr);gap:30px;align-items:center;overflow:hidden;padding:20px;border:1px solid rgba(167,107,255,.2);border-radius:26px;background:radial-gradient(circle at 15% 12%,rgba(127,59,255,.18),transparent 34%),linear-gradient(135deg,rgba(21,18,34,.92),rgba(12,11,18,.88));box-shadow:0 26px 72px rgba(0,0,0,.27),inset 0 1px 0 rgba(255,255,255,.04);backdrop-filter:blur(18px)}
+.mvz-promo-card:after{content:"";position:absolute;width:280px;height:280px;border-radius:50%;right:-120px;top:-150px;background:rgba(136,62,255,.12);filter:blur(16px);pointer-events:none}
+.mvz-promo-visual{position:relative;display:block;aspect-ratio:1;border-radius:20px;overflow:hidden;background:#0b0913;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 42px rgba(0,0,0,.32);z-index:1}
+.mvz-promo-visual img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .35s ease,filter .35s ease}
+.mvz-promo-visual:hover img{transform:scale(1.025);filter:brightness(1.05)}
+.mvz-promo-copy{position:relative;z-index:1;min-width:0;padding:4px 22px 4px 0}
+.mvz-promo-topline{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.mvz-promo-label{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:#bba5ff;font-weight:850}
+.mvz-promo-mark{display:inline-flex;align-items:center;justify-content:center;height:23px;padding:0 8px;border:1px solid rgba(171,107,255,.32);border-radius:999px;background:rgba(141,74,255,.09);color:#cdafff;font-size:9px;font-weight:900;letter-spacing:.11em}
+.mvz-promo h2{margin:0 0 10px;font-size:clamp(28px,3.5vw,46px);line-height:1;letter-spacing:-2px;background:linear-gradient(100deg,#fff 5%,#d7c3ff 52%,#aa69ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.mvz-promo-copy>p{max-width:720px;margin:0;color:#aaa6b4;font-size:15px;line-height:1.65}
+.mvz-promo-copy>p strong{color:#eee9f7;font-weight:750}
+.mvz-promo-points{display:flex;gap:8px;flex-wrap:wrap;margin-top:17px}
+.mvz-promo-points span{display:inline-flex;align-items:center;min-height:31px;padding:0 10px;border:1px solid rgba(255,255,255,.07);border-radius:999px;background:rgba(255,255,255,.035);color:#c7c2ce;font-size:10px;font-weight:650}
+.mvz-promo-actions{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-top:19px}
+.mvz-promo-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:46px;padding:0 16px;border:1px solid rgba(186,125,255,.3);border-radius:14px;background:linear-gradient(135deg,#7544e8,#9b4be4);color:#fff;font-size:12px;font-weight:800;box-shadow:0 12px 32px rgba(117,68,232,.22);transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}
+.mvz-promo-button:hover{transform:translateY(-2px);box-shadow:0 16px 38px rgba(117,68,232,.3);filter:brightness(1.06)}
+.mvz-promo-telegram{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:rgba(255,255,255,.12);font-size:12px}
+.mvz-promo-note{color:#716c7d;font-size:10px}
+@media(max-width:760px){.mvz-promo{width:min(100% - 24px,1180px);margin:-20px auto 60px}.mvz-promo-card{grid-template-columns:116px minmax(0,1fr);gap:16px;padding:13px;border-radius:20px}.mvz-promo-visual{border-radius:15px}.mvz-promo-copy{padding:0}.mvz-promo h2{font-size:28px;letter-spacing:-1.3px;margin-bottom:7px}.mvz-promo-copy>p{font-size:12px;line-height:1.5}.mvz-promo-points{margin-top:11px;gap:6px}.mvz-promo-points span{min-height:27px;padding:0 8px;font-size:9px}.mvz-promo-actions{margin-top:12px}.mvz-promo-button{min-height:41px;padding:0 12px;font-size:11px}.mvz-promo-note{display:none}}
+@media(max-width:500px){.mvz-promo-card{grid-template-columns:92px minmax(0,1fr);align-items:start}.mvz-promo-topline{margin-bottom:6px}.mvz-promo-label{font-size:9px}.mvz-promo-mark{height:20px}.mvz-promo h2{font-size:24px}.mvz-promo-copy>p{font-size:11px}.mvz-promo-points span:nth-child(2){display:none}.mvz-promo-button{width:100%}}
+html.tv-mode .mvz-promo{display:none!important}

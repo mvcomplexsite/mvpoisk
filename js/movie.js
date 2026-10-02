@@ -1,7 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=45';
-import { CONFIG, getWatchUrl } from './config.js?v=45';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=45';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=45';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=46';
+import { CONFIG, getWatchUrl } from './config.js?v=46';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=46';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=46';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
