@@ -184,6 +184,11 @@ let backupAbort = null;
 let backupSources = [];
 let backupSourceIndex = -1;
 let activePlayerMode = 'primary';
+let activePlayerSource = 'rendex';
+let playerTelemetryTimer = null;
+let playerResumeTimer = null;
+let resumeFrame = null;
+let resumeApplied = false;
 let kinoboxScriptPromise = null;
 let kinoboxProbeInstance = null;
 
@@ -252,6 +257,18 @@ function stringFromObject(value, wanted, depth = 0) {
   return '';
 }
 
+function inferSeasonEpisode(...values) {
+  for (const raw of values) {
+    const value = String(raw || '').trim();
+    if (!value) continue;
+    let match = value.match(/(?:season|сезон)\s*[:#№._-]?\s*(\d{1,3}).*?(?:episode|эпизод|сер(?:ия|ии|ию)?)\s*[:#№._-]?\s*(\d{1,4})/i);
+    if (!match) match = value.match(/\bs\s*(\d{1,3})\s*[eесs]\s*(\d{1,4})\b/i);
+    if (!match) match = value.match(/\b(\d{1,3})\s*[xх]\s*(\d{1,4})\b/i);
+    if (match) return { season: Number(match[1]), episode: Number(match[2]) };
+  }
+  return { season: null, episode: null };
+}
+
 function parsePlayerMessage(raw) {
   let data = raw;
   if (typeof raw === 'string') {
@@ -261,13 +278,139 @@ function parsePlayerMessage(raw) {
   }
   if (!data || typeof data !== 'object') return null;
   const kind = stringFromObject(data, ['event', 'type', 'name', 'method', 'action']);
-  const position = numberFromObject(data, ['currenttime', 'currentposition', 'position', 'playedtime', 'playbacktime']);
-  const duration = numberFromObject(data, ['duration', 'totalduration', 'totaltime', 'length']);
+  const normalizedKind = String(kind || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const answer = data?.answer ?? data?.value ?? null;
+
+  let position = numberFromObject(data, ['currenttime', 'currentposition', 'position', 'playedtime', 'playbacktime', 'seconds']);
+  let duration = numberFromObject(data, ['duration', 'totalduration', 'totaltime', 'length']);
   let percent = numberFromObject(data, ['percent', 'progress', 'percentage']);
+  let playlistId = stringFromObject(data, ['playlistid', 'currentplaylistid', 'fileid', 'trackid']);
+  let playlistTitle = stringFromObject(data, ['playlisttitle', 'currentplaylisttitle', 'filetitle', 'tracktitle']);
+
+  // PlayerJS answers iframe API queries as {event, answer}.
+  if (Number.isFinite(Number(answer))) {
+    if (normalizedKind === 'time' || normalizedKind === 'currenttime') position = Number(answer);
+    if (normalizedKind === 'duration') duration = Number(answer);
+  }
+  if (typeof answer === 'string' || typeof answer === 'number') {
+    if (/playlist_?id|playlistid/.test(normalizedKind)) playlistId = String(answer);
+    if (/playlist_?title|playlisttitle/.test(normalizedKind)) playlistTitle = String(answer);
+  }
+
   if (Number.isFinite(percent) && percent > 1 && percent <= 100) percent /= 100;
-  const season = numberFromObject(data, ['season', 'seasonnumber', 'seasonnum']);
-  const episode = numberFromObject(data, ['episode', 'episodenumber', 'episodenum', 'series']);
-  return { kind, position, duration, percent, season, episode };
+  let season = numberFromObject(data, ['season', 'seasonnumber', 'seasonnum']);
+  let episode = numberFromObject(data, ['episode', 'episodenumber', 'episodenum', 'series']);
+  const inferred = inferSeasonEpisode(playlistId, playlistTitle);
+  if (!Number.isFinite(season) && Number.isFinite(inferred.season)) season = inferred.season;
+  if (!Number.isFinite(episode) && Number.isFinite(inferred.episode)) episode = inferred.episode;
+  return { kind, position, duration, percent, season, episode, playlistId, playlistTitle };
+}
+
+function playerTargetOrigin(frame) {
+  try {
+    const src = String(frame?.getAttribute('src') || frame?.src || '');
+    const url = new URL(src, location.href);
+    return /^https?:$/.test(url.protocol) ? url.origin : '*';
+  } catch {
+    return '*';
+  }
+}
+
+function postPlayerApi(frame, api, set) {
+  if (!frame?.contentWindow) return false;
+  const message = { api };
+  if (set !== undefined) message.set = set;
+  try {
+    frame.contentWindow.postMessage(message, playerTargetOrigin(frame));
+    return true;
+  } catch {
+    try { frame.contentWindow.postMessage(message, '*'); return true; } catch { return false; }
+  }
+}
+
+function queryPlayerState(frame) {
+  if (!frame?.isConnected) return;
+  postPlayerApi(frame, 'time');
+  postPlayerApi(frame, 'duration');
+  postPlayerApi(frame, 'playlist_id');
+  postPlayerApi(frame, 'playlist_title');
+}
+
+function resumableProgress() {
+  if (!currentMovie) return null;
+  const entry = getHistoryEntry(currentMovie.id);
+  const progress = entry?.progress || null;
+  if (!progress || entry?.completed) return null;
+  const position = Number(progress.position);
+  if (!Number.isFinite(position) || position < 8) return null;
+  if (Number.isFinite(Number(progress.percent)) && Number(progress.percent) >= 0.93) return null;
+  return progress;
+}
+
+function resumeDescription(progress) {
+  const bits = [];
+  if (Number.isFinite(Number(progress?.season))) bits.push(`сезон ${Number(progress.season)}`);
+  if (Number.isFinite(Number(progress?.episode))) bits.push(`серия ${Number(progress.episode)}`);
+  const seconds = Math.max(0, Math.floor(Number(progress?.position || 0)));
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const sec = seconds % 60;
+  const time = h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  bits.push(time);
+  return bits.join(' · ');
+}
+
+function maybeRestorePlayback(frame) {
+  if (!frame || frame !== resumeFrame || resumeApplied || !frame.isConnected) return false;
+  const progress = resumableProgress();
+  if (!progress) return false;
+
+  const position = Math.max(0, Math.floor(Number(progress.position || 0)));
+  const playlistId = String(progress.playlistId || '').trim();
+  const isSeries = Boolean(currentMovie?.isSeries || /series/i.test(currentMovie?.type || ''));
+
+  // Playlist ids belong to a particular embedded provider. Never send an id
+  // learned from Rendex to a different backup provider (or vice versa).
+  if (isSeries) {
+    if (!playlistId) return false;
+    if (progress.playerMode && progress.playerMode !== activePlayerMode) return false;
+    if (activePlayerMode === 'backup' && progress.playerSource && playerSourceKey(progress.playerSource) !== playerSourceKey(activePlayerSource)) return false;
+  }
+
+  if (playlistId) {
+    postPlayerApi(frame, 'play', `id:${playlistId}[seek:${position}]`);
+  } else {
+    postPlayerApi(frame, 'seek', position);
+  }
+  resumeApplied = true;
+  clearTimeout(playerResumeTimer);
+  setPlayerStatus(`Продолжаем с ${resumeDescription(progress)}.`, 'ready');
+  return true;
+}
+
+function startPlayerBridge(frame) {
+  const sameFrame = Boolean(frame && frame === resumeFrame);
+  clearInterval(playerTelemetryTimer);
+  clearTimeout(playerResumeTimer);
+  resumeFrame = frame || null;
+  if (!sameFrame) resumeApplied = false;
+  if (!frame) return;
+  const progress = resumableProgress();
+  if (progress) setPlayerStatus(`Нашли позицию ${resumeDescription(progress)} — восстанавливаем…`, 'loading');
+  setTimeout(() => queryPlayerState(frame), 500);
+  setTimeout(() => queryPlayerState(frame), 1800);
+  playerTelemetryTimer = setInterval(() => queryPlayerState(frame), 8000);
+  // Some embeds do not emit an explicit ready event but already accept API calls.
+  playerResumeTimer = setTimeout(() => maybeRestorePlayback(frame), 2600);
+}
+
+function stopPlayerBridge() {
+  clearInterval(playerTelemetryTimer);
+  clearTimeout(playerResumeTimer);
+  playerTelemetryTimer = null;
+  playerResumeTimer = null;
+  resumeFrame = null;
+  resumeApplied = false;
 }
 
 function bindPlayerTelemetry() {
@@ -278,29 +421,45 @@ function bindPlayerTelemetry() {
     const section = document.querySelector('#embeddedPlayerSection');
     if (!section || section.hidden) return;
     const frames = [...document.querySelectorAll('#embeddedPlayerHost iframe, #alternatePlayerHost iframe')];
-    const sourceMatches = frames.some(frame => {
+    const matchedFrame = frames.find(frame => {
       try { return frame.contentWindow === event.source; } catch { return false; }
     });
+    const sourceMatches = Boolean(matchedFrame);
     const parsed = parsePlayerMessage(event.data);
     if (!parsed) return;
-    const recognizedKind = /(time|progress|playback|player|episode|season|ended|complete)/i.test(parsed.kind || '');
+    const recognizedKind = /(time|progress|playback|player|episode|season|ended|complete|playlist|file|track|duration)/i.test(parsed.kind || '');
     if (!sourceMatches && !recognizedKind) return;
 
+    const previous = getHistoryEntry(currentMovie.id)?.progress || {};
     const patch = {};
-    if (Number.isFinite(parsed.duration) && parsed.duration >= 180 && parsed.duration <= 24 * 60 * 60) patch.duration = parsed.duration;
-    if ('duration' in patch && Number.isFinite(parsed.position) && parsed.position >= 0 && parsed.position <= patch.duration * 1.1) patch.position = parsed.position;
-    if ('duration' in patch && Number.isFinite(parsed.percent) && parsed.percent >= 0 && parsed.percent <= 1) patch.percent = parsed.percent;
+    if (Number.isFinite(parsed.duration) && parsed.duration >= 30 && parsed.duration <= 24 * 60 * 60) patch.duration = parsed.duration;
+    const knownDuration = Number(patch.duration || previous.duration || 0);
+    if (Number.isFinite(parsed.position) && parsed.position >= 0 && (!knownDuration || parsed.position <= knownDuration * 1.1)) patch.position = parsed.position;
+    if (Number.isFinite(parsed.percent) && parsed.percent >= 0 && parsed.percent <= 1) patch.percent = parsed.percent;
     if (Number.isFinite(parsed.season) && parsed.season >= 0 && parsed.season < 1000) patch.season = parsed.season;
     if (Number.isFinite(parsed.episode) && parsed.episode >= 0 && parsed.episode < 10000) patch.episode = parsed.episode;
+    if (parsed.playlistId) patch.playlistId = String(parsed.playlistId).slice(0, 160);
+    if (parsed.playlistTitle) patch.playlistTitle = String(parsed.playlistTitle).slice(0, 240);
+    patch.playerMode = activePlayerMode;
+    patch.playerSource = activePlayerSource;
     const detected = Object.keys(patch);
     rememberPlayerDiagnostic(event, parsed.kind, detected);
-    // Only persist playback state when the message came from an iframe that
-    // MVPoisk itself mounted. Other recognized messages remain diagnostics only.
-    if (!sourceMatches || !detected.length) return;
+    if (!sourceMatches) return;
 
+    // A real response from the mounted iframe means PlayerJS is ready enough
+    // to accept the cross-device resume command.
+    maybeRestorePlayback(matchedFrame);
+
+    const meaningful = detected.some(key => !['playerMode', 'playerSource'].includes(key));
+    if (!meaningful) return;
     const now = Date.now();
-    const important = 'season' in patch || 'episode' in patch || patch.percent === 1;
-    if (!important && now - lastTelemetryWrite < 5000) return;
+    const metadataChanged =
+      ('season' in patch && Number(patch.season) !== Number(previous.season)) ||
+      ('episode' in patch && Number(patch.episode) !== Number(previous.episode)) ||
+      ('playlistId' in patch && String(patch.playlistId || '') !== String(previous.playlistId || '')) ||
+      ('playlistTitle' in patch && String(patch.playlistTitle || '') !== String(previous.playlistTitle || ''));
+    const important = metadataChanged || patch.percent === 1;
+    if (!important && now - lastTelemetryWrite < 10000) return;
     lastTelemetryWrite = now;
     updatePlaybackProgress(currentMovie.id, patch);
     updateWatchStateButtons();
@@ -372,6 +531,25 @@ function normalizeBackupSources(payload) {
     });
 }
 
+const SAFE_PLAYER_SANDBOX = [
+  'allow-scripts',
+  'allow-same-origin',
+  'allow-forms',
+  'allow-presentation',
+  'allow-modals',
+  'allow-pointer-lock',
+].join(' ');
+
+function hardenPlayerIframe(iframe) {
+  if (!iframe) return;
+  // Keep everything the video player normally needs, but deliberately do not
+  // grant popup or top-navigation capabilities. This blocks the common
+  // "tap Play -> advertising tab/site" behaviour without touching the
+  // provider's scripts, HLS, playlist or playback API.
+  iframe.setAttribute('sandbox', SAFE_PLAYER_SANDBOX);
+  iframe.setAttribute('referrerpolicy', 'origin-when-cross-origin');
+}
+
 function cleanBackupPlayerUrl(rawUrl) {
   // Keep the partner-provided iframe URL byte-for-byte. Some backup providers
   // sign the full query string, so adding our own parameters can break playback.
@@ -392,6 +570,7 @@ function mountBackupSource(host, index = 0) {
   const source = backupSources[safeIndex];
   backupSourceIndex = safeIndex;
   activePlayerMode = 'backup';
+  activePlayerSource = source.key || source.type || 'backup';
   const src = cleanBackupPlayerUrl(source.iframeUrl);
   host.classList.remove('player-failed');
   host.innerHTML = `
@@ -406,11 +585,13 @@ function mountBackupSource(host, index = 0) {
       allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
       allowfullscreen
       referrerpolicy="origin-when-cross-origin"
-      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-popups"></iframe>`;
+      sandbox="${SAFE_PLAYER_SANDBOX}"></iframe>`;
   const frame = host.querySelector('.mv-backup-player-frame');
+  hardenPlayerIframe(frame);
   frame?.addEventListener('load', () => {
     setPlayerStarting(false);
     setPlayerStatus(`Запасной источник ${source.type} загружен. Если экран пустой — нажми «Другой источник».`, 'ready');
+    startPlayerBridge(frame);
     updateBackupButton();
   }, { once: true });
   setPlayerStatus(`Подключаем запасной источник ${source.type}…`, 'loading');
@@ -521,7 +702,7 @@ async function fetchBackupSources() {
     throw sdkError;
   }
 }
-async function startBackupEmbeddedPlayer({ next = false, automatic = false } = {}) {
+async function startBackupEmbeddedPlayer({ next = false, automatic = false, preferredSource = '' } = {}) {
   if (!currentMovie) return;
   const { section, host } = playerElements();
   if (!section || !host) return;
@@ -547,7 +728,13 @@ async function startBackupEmbeddedPlayer({ next = false, automatic = false } = {
 
   try {
     await fetchBackupSources();
-    mountBackupSource(host, 0);
+    let preferredIndex = 0;
+    if (preferredSource) {
+      const wanted = playerSourceKey(preferredSource);
+      const found = backupSources.findIndex(item => item.key === wanted || playerSourceKey(item.type) === wanted);
+      if (found >= 0) preferredIndex = found;
+    }
+    mountBackupSource(host, preferredIndex);
   } catch (error) {
     console.warn('[MVPoisk backup player]', error);
     setPlayerStarting(false);
@@ -592,6 +779,9 @@ function setPlayerStarting(value) {
 
 function markPlayerReady(iframe) {
   if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
+  // Rendex creates its own iframe, so apply the same conservative sandbox as
+  // soon as it appears in our player host. No ad URLs are filtered here.
+  hardenPlayerIframe(iframe);
   const { host } = playerElements();
   host?.classList.remove('player-failed');
   iframe.dataset.mvPlayerReady = '1';
@@ -604,6 +794,8 @@ function markPlayerReady(iframe) {
   clearTimeout(playerTimer);
   setPlayerStarting(false);
   activePlayerMode = 'primary';
+  activePlayerSource = 'rendex';
+  startPlayerBridge(iframe);
   updateBackupButton();
   setPlayerStatus('Плеер подключён. Если увидишь чёрный экран — нажми «Запасной».', 'ready');
   iframe.addEventListener('load', () => {
@@ -614,6 +806,7 @@ function markPlayerReady(iframe) {
       startBackupEmbeddedPlayer({ automatic: true });
       return;
     }
+    startPlayerBridge(iframe);
     setPlayerStatus('Плеер загружен. Если экран остаётся чёрным — нажми «Запасной».', 'ready');
   }, { once: true });
 }
@@ -627,7 +820,9 @@ function stopEmbeddedPlayer({ hide = true } = {}) {
   kinoboxProbeInstance = null;
   backupSources = [];
   backupSourceIndex = -1;
+  stopPlayerBridge();
   activePlayerMode = 'primary';
+  activePlayerSource = 'rendex';
   const { section, host } = playerElements();
   if (host) {
     // Removing the cross-origin iframe is the reliable way to stop hidden audio/video.
@@ -674,8 +869,17 @@ async function startAlternatePlayer() {
 }
 
 async function startPrimaryPlayer(force = false) {
-  // v45: use the previously stable embedded Rendex/Vibix path on web and TV.
+  // Manual retry always returns to the stable primary source.
   return startEmbeddedPlayer(force);
+}
+
+async function startPreferredPlayer() {
+  if (!currentMovie) return;
+  const entry = getHistoryEntry(currentMovie.id);
+  if (entry?.source === 'backup') {
+    return startBackupEmbeddedPlayer({ preferredSource: entry?.progress?.playerSource || '' });
+  }
+  return startEmbeddedPlayer(false);
 }
 
 async function startEmbeddedPlayer(force = false) {
@@ -689,6 +893,7 @@ async function startEmbeddedPlayer(force = false) {
   backupSources = [];
   backupSourceIndex = -1;
   activePlayerMode = 'primary';
+  activePlayerSource = 'rendex';
   updateBackupButton();
   recordWatchStart(currentMovie, 'primary');
   updateWatchStateButtons();
@@ -753,7 +958,7 @@ async function startEmbeddedPlayer(force = false) {
 
 function bindWatchAction() {
   const button = document.querySelector('[data-watch-action]');
-  button?.addEventListener('click', () => startPrimaryPlayer(false));
+  button?.addEventListener('click', () => startPreferredPlayer());
 
   document.querySelector('[data-player-retry]')?.addEventListener('click', () => startPrimaryPlayer(true));
   document.querySelector('[data-player-backup]')?.addEventListener('click', () => startBackupEmbeddedPlayer({ next: activePlayerMode === 'backup' }));
