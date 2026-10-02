@@ -1,17 +1,21 @@
-# MVPoisk v44 — Player Stability Recovery
+# MVPoisk v45
 
-Restores the last known-working direct Rendex and Kinobox integrations. Cloudflare D1/Telegram accounts remain enabled. Clean Player Gateway from v39/v40 is intentionally removed from the playback path.
+Production web build for MVPoisk.
 
-# MVPoisk v37 — Cloudflare Accounts
+## Playback
+- Primary embedded player: Rendex/Vibix integration already used by the project before the v42/v44 player experiments.
+- Reserve action: GGPoisk.
+- No active Kinobox source picker and no Collaps/VenomPlayer bridge.
 
-v37 убирает Supabase из MVPoisk. Telegram Login, собственные web-сессии, синхронизация пользовательских данных и TV pairing работают через существующий Cloudflare Worker + Cloudflare D1.
+## Backend
+- `worker/worker.js` — Cloudflare Worker v45: PoiskKino key pool/cache, Telegram OIDC, D1 sessions/state, TV pairing.
+- Public PoiskKino proxy is limited to the movie/search/review routes used by this frontend.
+- `cloudflare/schema.sql` — D1 schema.
 
-Основные файлы:
+## Frontend
+- `js/account.js` — Telegram account/session/cloud-sync client.
+- `js/movie.js` — movie page and simplified player flow.
+- `js/config.js` — public frontend configuration.
+- `sw.js` — PWA cache/offline behavior.
 
-- `worker/worker.js` — Worker v37: PoiskKino key pool + Telegram OIDC + D1 + TV pairing.
-- `cloudflare/schema.sql` — схема D1.
-- `CLOUDFLARE-ACCOUNTS-SETUP.md` — пошаговая настройка.
-- `js/account.js` — frontend auth/sync без Supabase SDK.
-- `js/config.js` — публичная конфигурация сайта.
-
-Плееры Rendex/Kinobox и существующая TV-логика не менялись этой версией.
+See `MVPOISK-V45-CHANGES.md` for the changes in this build.

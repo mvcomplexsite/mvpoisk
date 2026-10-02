@@ -64,6 +64,55 @@ function normalizeSearch(url) {
   return params.toString();
 }
 
+
+function validatePublicApiRequest(upstreamPath, incoming) {
+  // MVPoisk frontend currently needs only movie lists/search/details and reviews.
+  // Keeping this allow-list prevents the public Worker from becoming a generic
+  // poiskkino.dev proxy that can drain every configured API key.
+  const movieDetail = /^\/v1(?:\.\d+)?\/movie\/\d{1,12}$/.test(upstreamPath);
+  const movieList = /^\/v1(?:\.\d+)?\/movie$/.test(upstreamPath);
+  const movieSearch = /^\/v1(?:\.\d+)?\/movie\/search$/.test(upstreamPath);
+  const reviewList = /^\/v1(?:\.\d+)?\/review$/.test(upstreamPath);
+  if (!(movieDetail || movieList || movieSearch || reviewList)) {
+    return { ok: false, status: 403, error: 'api_route_not_allowed' };
+  }
+
+  const allowedParams = movieDetail
+    ? new Set()
+    : movieSearch
+      ? new Set(['query', 'page', 'limit'])
+      : reviewList
+        ? new Set(['movieId', 'page', 'limit'])
+        : new Set(['rating.kp', 'votes.kp', 'genres.name', 'year', 'isSeries', 'notNullFields', 'sortField', 'sortType', 'page', 'limit']);
+  const entries = [...incoming.searchParams.entries()];
+  if (entries.length > 20 || entries.some(([key]) => !allowedParams.has(key))) {
+    return { ok: false, status: 400, error: 'invalid_query_parameters' };
+  }
+
+  const limitRaw = incoming.searchParams.get('limit');
+  if (limitRaw != null) {
+    const limit = Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 240) {
+      return { ok: false, status: 400, error: 'invalid_limit' };
+    }
+  }
+
+  const pageRaw = incoming.searchParams.get('page');
+  if (pageRaw != null) {
+    const page = Number(pageRaw);
+    if (!Number.isInteger(page) || page < 1 || page > 10) {
+      return { ok: false, status: 400, error: 'invalid_page' };
+    }
+  }
+
+  const query = incoming.searchParams.get('query');
+  if (query != null && (query.length < 1 || query.length > 160)) {
+    return { ok: false, status: 400, error: 'invalid_query' };
+  }
+
+  return { ok: true };
+}
+
 function cacheSeconds(pathname) {
   if (/\/movie\/\d+$/.test(pathname)) return 7 * 24 * 60 * 60;
   if (pathname.endsWith('/movie/search')) return 6 * 60 * 60;
@@ -742,130 +791,6 @@ async function handleUserApi(request, env, incoming) {
   return json({ error: 'not_found' }, 404);
 }
 
-
-// ===== v44 Collaps modern-player config bridge =====
-// We keep video delivery on the partner CDN. The Worker only reads the
-// partner-approved embed configuration so the web client can instantiate the
-// same VenomPlayer with a conventional modern control bar and without an ad
-// configuration. No HLS/video bytes are proxied through Cloudflare.
-const COLLAPS_CANONICAL_ORIGIN = 'https://api.delivembd.ws';
-const COLLAPS_CONFIG_MAX_BYTES = 1_500_000;
-
-function isAllowedCollapsUrl(raw) {
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== 'https:') return false;
-    const host = url.hostname.toLowerCase();
-    return host === 'api.delivembd.ws'
-      || host === 'delivembd.ws'
-      || host === 'embess.ws'
-      || host.endsWith('.embess.ws');
-  } catch {
-    return false;
-  }
-}
-
-function extractMakePlayerExpression(html) {
-  const text = String(html || '');
-  const patterns = [/(?:^|[^\w$])makePlayer\s*\(/g, /VenomPlayer\s*\.\s*make\s*\(/g];
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text))) {
-      const openParen = text.indexOf('(', match.index);
-      if (openParen < 0) continue;
-      let depth = 1;
-      let quote = '';
-      let escaped = false;
-      let lineComment = false;
-      let blockComment = false;
-      for (let i = openParen + 1; i < text.length; i++) {
-        const ch = text[i];
-        const next = text[i + 1] || '';
-        if (lineComment) {
-          if (ch === '\n' || ch === '\r') lineComment = false;
-          continue;
-        }
-        if (blockComment) {
-          if (ch === '*' && next === '/') { blockComment = false; i++; }
-          continue;
-        }
-        if (quote) {
-          if (escaped) { escaped = false; continue; }
-          if (ch === '\\') { escaped = true; continue; }
-          if (ch === quote) quote = '';
-          continue;
-        }
-        if (ch === '/' && next === '/') { lineComment = true; i++; continue; }
-        if (ch === '/' && next === '*') { blockComment = true; i++; continue; }
-        if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
-        if (ch === '(') depth++;
-        else if (ch === ')') {
-          depth--;
-          if (depth === 0) {
-            const expression = text.slice(openParen + 1, i).trim();
-            if (expression.startsWith('{') && expression.endsWith('}')) return expression;
-            break;
-          }
-        }
-      }
-    }
-  }
-  return '';
-}
-
-async function fetchCollapsEmbedText(url, request) {
-  const response = await fetch(url, {
-    method: 'GET',
-    redirect: 'follow',
-    headers: {
-      'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
-      'Accept-Language': request.headers.get('Accept-Language') || 'ru,en;q=0.8',
-      'User-Agent': request.headers.get('User-Agent') || 'Mozilla/5.0 MVPoisk/44',
-      'Referer': new URL(url).origin + '/',
-    },
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const declaredLength = Number(response.headers.get('Content-Length') || 0);
-  if (declaredLength > COLLAPS_CONFIG_MAX_BYTES) throw new Error('embed_too_large');
-  const text = await response.text();
-  if (text.length > COLLAPS_CONFIG_MAX_BYTES) throw new Error('embed_too_large');
-  return text;
-}
-
-async function handleCollapsConfig(request, incoming) {
-  const id = String(incoming.searchParams.get('id') || '').trim();
-  if (!/^\d{1,12}$/.test(id)) return json({ ok: false, error: 'invalid_kinopoisk_id' }, 400, { 'Cache-Control': 'no-store' });
-
-  const candidates = [];
-  const supplied = String(incoming.searchParams.get('src') || '').trim();
-  if (supplied && isAllowedCollapsUrl(supplied)) candidates.push(supplied);
-  candidates.push(`${COLLAPS_CANONICAL_ORIGIN}/embed/kp/${encodeURIComponent(id)}`);
-
-  const seen = new Set();
-  const failures = [];
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    try {
-      const html = await fetchCollapsEmbedText(candidate, request);
-      const expression = extractMakePlayerExpression(html);
-      if (!expression) throw new Error('makePlayer_config_not_found');
-      return json({
-        ok: true,
-        expression,
-        source: new URL(candidate).hostname,
-      }, 200, {
-        'Cache-Control': 'no-store, max-age=0',
-        'X-Content-Type-Options': 'nosniff',
-      });
-    } catch (error) {
-      failures.push(`${new URL(candidate).hostname}:${String(error?.message || error)}`);
-    }
-  }
-  return json({ ok: false, error: 'collaps_config_unavailable', details: failures.slice(0, 4) }, 502, { 'Cache-Control': 'no-store' });
-}
-
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
@@ -873,7 +798,6 @@ export default {
     const incoming = new URL(request.url);
     if (incoming.pathname.startsWith('/auth/')) return handleAuth(request, env, incoming, ctx);
     if (incoming.pathname.startsWith('/user/')) return handleUserApi(request, env, incoming);
-    if (incoming.pathname === '/player/collaps/config' && request.method === 'GET') return handleCollapsConfig(request, incoming);
 
     const cache = caches.default;
     const slots = getKeySlots(env);
@@ -884,7 +808,7 @@ export default {
       return json({
         ok: true,
         service: 'MVPoisk API cache + key pool + Cloudflare accounts',
-        version: 44,
+        version: 45,
         upstream: 'poiskkino.dev',
         cache: 'Cloudflare Cache API',
         configuredKeys: slots.length,
@@ -896,13 +820,12 @@ export default {
         tvPairing: d1Configured(env) ? 'ready' : 'needs D1 binding DB',
         telegramCallbackUrl: callback,
         frontendUrl: allowedFrontendBases(env)[0] || DEFAULT_FRONTEND_URL,
-        collapsModernPlayer: 'ready',
-        keys: status,
+        keys: status.map(item => ({ slot: item.slot, state: item.state, cooldownUntil: item.cooldownUntil })),
       });
     }
 
     if (!incoming.pathname.startsWith('/api/')) {
-      return json({ error: 'not_found', hint: 'Use /api/v1.4/..., /auth/... or /player/collaps/config' }, 404);
+      return json({ error: 'not_found', hint: 'Use /api/v1.4/... or /auth/...' }, 404);
     }
     if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 
@@ -910,6 +833,9 @@ export default {
     if (!/^\/v1(?:\.\d+)?\//.test(upstreamPath)) {
       return json({ error: 'unsupported_api_path' }, 400);
     }
+
+    const validation = validatePublicApiRequest(upstreamPath, incoming);
+    if (!validation.ok) return json({ error: validation.error }, validation.status);
 
     const normalizedQuery = normalizeSearch(incoming);
     const cacheUrl = new URL(request.url);

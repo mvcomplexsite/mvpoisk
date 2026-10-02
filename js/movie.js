@@ -1,8 +1,7 @@
-import { getMovie, getReviews, getSimilarMovies } from './api.js?v=44';
-import { CONFIG, getWatchUrl } from './config.js?v=44';
-import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=44';
-import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=44';
-import { mountCollapsModernPlayer } from './collaps-modern.js?v=44';
+import { getMovie, getReviews, getSimilarMovies } from './api.js?v=45';
+import { CONFIG, getWatchUrl } from './config.js?v=45';
+import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=45';
+import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=45';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -302,507 +301,6 @@ function bindPlayerTelemetry() {
   });
 }
 
-// Reserve Kinobox path. Kept completely separate from the working Rendex path:
-// it is not downloaded or initialized until the user asks for another source.
-let alternateScriptPromise = null;
-let alternateInstance = null;
-let alternateTimer = null;
-let alternateAttemptId = 0;
-let alternateStarting = false;
-
-// Web v42: Kinobox is the primary player on desktop/mobile. We fetch the
-// player list directly in the browser (the partner SDK does the same), remove
-// the Turbo/obrut route, prefer less ad-oriented balancers, and render our own
-// source selector. TV keeps the older integration for now.
-let webKinoboxAbort = null;
-let webCollapsModernSession = null;
-const WEB_PLAYER_SOURCE_PREF_KEY = 'mvpoisk:web-player-source:v1';
-const WEB_CLEAN_SOURCE_KEY = 'collaps';
-const WEB_SOURCE_PRIORITY = ['collaps', 'kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha'];
-const WEB_SOURCE_LOW_PRIORITY = new Set(['alloha', 'cdnmovies', 'videocdn', 'turbo', 'obrut']);
-
-function sourceKey(value) {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-function kinoboxPlayerApiUrl(id) {
-  const url = new URL('/api/players', CONFIG.KINOBOX_BASE_URL);
-  url.searchParams.set('kinopoisk', String(id));
-  return url.toString();
-}
-
-function normalizeKinoboxRows(payload) {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.data)
-      ? payload.data
-      : Array.isArray(payload?.sources)
-        ? payload.sources
-        : [];
-  const seen = new Set();
-  return rows
-    .map((item, index) => {
-      const type = String(item?.type || item?.source || `Источник ${index + 1}`).trim();
-      const iframeUrl = String(item?.iframeUrl || '').trim();
-      const translations = Array.isArray(item?.translations) ? item.translations : [];
-      const quality = translations.find(t => t?.quality)?.quality || '';
-      return { raw: item, index, type, key: sourceKey(type), iframeUrl, translations, quality };
-    })
-    .filter(item => {
-      if (!/^https?:\/\//i.test(item.iframeUrl)) return false;
-      // The partner page itself removes obrut in multiple countries. For the
-      // ad-reduced MVPoisk web path we remove it everywhere and also reject the
-      // equivalent Turbo source.
-      if (item.key === 'turbo' || item.key === 'obrut' || /obrut/i.test(item.iframeUrl)) return false;
-      if (seen.has(item.iframeUrl)) return false;
-      seen.add(item.iframeUrl);
-      return true;
-    })
-    .sort((a, b) => {
-      const ai = WEB_SOURCE_PRIORITY.indexOf(a.key);
-      const bi = WEB_SOURCE_PRIORITY.indexOf(b.key);
-      const ar = ai < 0 ? 50 : ai;
-      const br = bi < 0 ? 50 : bi;
-      const al = WEB_SOURCE_LOW_PRIORITY.has(a.key) ? 20 : 0;
-      const bl = WEB_SOURCE_LOW_PRIORITY.has(b.key) ? 20 : 0;
-      return (ar + al) - (br + bl) || a.index - b.index;
-    });
-}
-
-function cleanPlayerUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    // Partner-approved ad-reduction hints. Sources that do not support these
-    // simply ignore them. No stream/signature URL is rewritten here.
-    if (!url.searchParams.has('noads')) url.searchParams.set('noads', '1');
-    if (!url.searchParams.has('onlyNoAds')) url.searchParams.set('onlyNoAds', '1');
-    return url.toString();
-  } catch {
-    return rawUrl;
-  }
-}
-
-function webSourceLabel(item, index) {
-  const quality = item.quality ? ` · ${item.quality}` : '';
-  return `${index + 1}. ${item.type}${quality}`;
-}
-
-function cleanCollapsRows(rows) {
-  return rows.filter(item => item.key === WEB_CLEAN_SOURCE_KEY || /collaps/i.test(item.type) || /collaps/i.test(item.iframeUrl));
-}
-
-function renderCleanSourceUnavailable(host, allRows = []) {
-  if (!host) return;
-  const hasOtherSources = allRows.length > 0;
-  host.innerHTML = `
-    <div class="alternate-player-error mv-clean-source-unavailable">
-      <div class="player-fail-mark">!</div>
-      <strong>Чистый источник недоступен</strong>
-      <span>Для этого фильма Collaps сейчас не найден. MVPoisk не включает рекламные источники автоматически.</span>
-      ${hasOtherSources ? '<button type="button" class="secondary-button mv-show-ad-sources">Другие источники · возможна реклама</button>' : ''}
-    </div>`;
-  setPlayerStarting(false);
-  setPlayerStatus('Collaps для этого фильма не найден.', 'error');
-  host.querySelector('.mv-show-ad-sources')?.addEventListener('click', () => {
-    mountWebKinoboxSource(host, allRows, 0);
-    setPlayerStatus('Открыты резервные источники. На них может быть реклама.', 'ready');
-  });
-}
-
-function stopWebCollapsModernPlayer() {
-  if (!webCollapsModernSession) return;
-  try { webCollapsModernSession.destroy?.(); } catch {}
-  webCollapsModernSession = null;
-}
-
-function mountDirectWebSourceFrame(host, rows, index, selected, message = '') {
-  stopWebCollapsModernPlayer();
-  host.innerHTML = `
-    <div class="mv-web-source-shell">
-      <div class="mv-web-source-bar" role="tablist" aria-label="Источники видео">
-        ${rows.map((item, i) => `<button type="button" class="mv-web-source-chip${i === index ? ' is-active' : ''}" data-web-source-index="${i}" title="${esc(item.type)}">${esc(webSourceLabel(item, i))}</button>`).join('')}
-      </div>
-      ${message ? `<div class="mv-player-inline-note">${esc(message)}</div>` : ''}
-      <div class="mv-web-source-frame-wrap">
-        <div class="embedded-player-loader mv-web-source-loader" aria-hidden="true"><div class="spinner"></div><strong>Загружаем ${esc(selected.type)}…</strong><span>Если источник не подходит, выбери другой сверху</span></div>
-        <iframe class="mv-embedded-iframe mv-web-source-frame"
-          src="${esc(cleanPlayerUrl(selected.iframeUrl))}"
-          title="${esc(`Источник ${selected.type}`)}"
-          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
-          allowfullscreen
-          referrerpolicy="origin-when-cross-origin"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-downloads"></iframe>
-        ${selected.key === WEB_CLEAN_SOURCE_KEY ? `
-        <div class="mv-collaps-controls" aria-label="Управление плеером MVPoisk">
-          <button type="button" class="mv-player-icon" data-cmd="toggle" aria-label="Воспроизвести">▶</button>
-          <button type="button" class="mv-player-icon" data-cmd="back10" aria-label="Назад на 10 секунд">−10</button>
-          <button type="button" class="mv-player-icon" data-cmd="forward10" aria-label="Вперёд на 10 секунд">+10</button>
-          <span class="mv-player-current">0:00</span>
-          <input class="mv-player-timeline" type="range" min="0" max="1" value="0" step="1" aria-label="Перемотка">
-          <span class="mv-player-duration">0:00</span>
-          <button type="button" class="mv-player-icon" data-cmd="mute" aria-label="Выключить звук">🔊</button>
-          <input class="mv-player-volume" type="range" min="0" max="1" value="1" step="0.05" aria-label="Громкость">
-          <button type="button" class="mv-player-icon" data-cmd="fullscreen" aria-label="На весь экран">⛶</button>
-        </div>` : ''}
-      </div>
-    </div>`;
-
-  const frame = host.querySelector('.mv-web-source-frame');
-  const loader = host.querySelector('.mv-web-source-loader');
-  if (selected.key === WEB_CLEAN_SOURCE_KEY) attachCollapsControls(host.querySelector('.mv-web-source-shell'), frame);
-  frame?.addEventListener('load', () => {
-    loader?.remove();
-    setPlayerStarting(false);
-    setPlayerStatus(`Источник ${selected.type} подключён.`, 'ready');
-  }, { once: true });
-
-  host.querySelectorAll('[data-web-source-index]').forEach(button => {
-    button.addEventListener('click', () => {
-      const next = Number(button.dataset.webSourceIndex || 0);
-      mountWebKinoboxSource(host, rows, next);
-    });
-  });
-}
-
-
-function formatPlayerTime(value) {
-  const total = Math.max(0, Math.floor(Number(value) || 0));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = total % 60;
-  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
-}
-
-function postPlayerApi(frame, api, set) {
-  if (!frame?.contentWindow) return;
-  const payload = { api };
-  if (set !== undefined) payload.set = set;
-  frame.contentWindow.postMessage(payload, '*');
-}
-
-function attachCollapsControls(shell, frame) {
-  if (!shell || !frame) return;
-  const controls = shell.querySelector('.mv-collaps-controls');
-  if (!controls) return;
-
-  const playBtn = controls.querySelector('[data-cmd="toggle"]');
-  const backBtn = controls.querySelector('[data-cmd="back10"]');
-  const fwdBtn = controls.querySelector('[data-cmd="forward10"]');
-  const muteBtn = controls.querySelector('[data-cmd="mute"]');
-  const fsBtn = controls.querySelector('[data-cmd="fullscreen"]');
-  const timeline = controls.querySelector('.mv-player-timeline');
-  const volume = controls.querySelector('.mv-player-volume');
-  const currentEl = controls.querySelector('.mv-player-current');
-  const durationEl = controls.querySelector('.mv-player-duration');
-
-  let current = 0;
-  let duration = 0;
-  let muted = false;
-  let playing = false;
-
-  const updateTimeUi = () => {
-    if (currentEl) currentEl.textContent = formatPlayerTime(current);
-    if (durationEl) durationEl.textContent = formatPlayerTime(duration);
-    if (timeline && duration > 0 && document.activeElement !== timeline) {
-      timeline.max = String(Math.max(1, Math.floor(duration)));
-      timeline.value = String(Math.min(duration, current));
-    }
-  };
-  const updatePlayUi = () => {
-    if (playBtn) {
-      playBtn.textContent = playing ? '❚❚' : '▶';
-      playBtn.setAttribute('aria-label', playing ? 'Пауза' : 'Воспроизвести');
-    }
-  };
-  const updateMuteUi = () => {
-    if (muteBtn) {
-      muteBtn.textContent = muted ? '🔇' : '🔊';
-      muteBtn.setAttribute('aria-label', muted ? 'Включить звук' : 'Выключить звук');
-    }
-  };
-
-  playBtn?.addEventListener('click', () => postPlayerApi(frame, 'toggle'));
-  backBtn?.addEventListener('click', () => postPlayerApi(frame, 'seek', Math.max(0, current - 10)));
-  fwdBtn?.addEventListener('click', () => postPlayerApi(frame, 'seek', current + 10));
-  muteBtn?.addEventListener('click', () => postPlayerApi(frame, muted ? 'unmute' : 'mute'));
-  fsBtn?.addEventListener('click', () => {
-    postPlayerApi(frame, 'fullscreen');
-    // Browser fallback if the embedded PlayerJS build does not expose fullscreen over postMessage.
-    if (frame.requestFullscreen) frame.requestFullscreen().catch(() => {});
-  });
-  timeline?.addEventListener('input', () => {
-    current = Number(timeline.value || 0);
-    updateTimeUi();
-  });
-  timeline?.addEventListener('change', () => postPlayerApi(frame, 'seek', Number(timeline.value || 0)));
-  volume?.addEventListener('input', () => {
-    const value = Math.max(0, Math.min(1, Number(volume.value || 0)));
-    postPlayerApi(frame, 'volume', value);
-    if (value > 0 && muted) postPlayerApi(frame, 'unmute');
-  });
-
-  const onMessage = event => {
-    if (event.source !== frame.contentWindow) return;
-    const data = event.data;
-    if (!data || typeof data !== 'object') return;
-    const ev = String(data.event || data.api || '').toLowerCase();
-    const answer = data.answer ?? data.value ?? data.data;
-    if (ev === 'time') { current = Number(answer ?? data.time ?? current) || 0; updateTimeUi(); }
-    if (ev === 'duration' || ev === 'metadata') { duration = Number(answer ?? data.duration ?? duration) || duration; updateTimeUi(); }
-    if (ev === 'play' || ev === 'userplay') { playing = true; updatePlayUi(); }
-    if (ev === 'pause' || ev === 'userpause' || ev === 'stop' || ev === 'end' || ev === 'finish') { playing = false; updatePlayUi(); }
-    if (ev === 'mute') { muted = true; updateMuteUi(); }
-    if (ev === 'unmute') { muted = false; updateMuteUi(); }
-    if (ev === 'volume') {
-      const v = Number(answer);
-      if (Number.isFinite(v) && volume && document.activeElement !== volume) volume.value = String(Math.max(0, Math.min(1, v)));
-    }
-  };
-  window.addEventListener('message', onMessage);
-
-  frame.addEventListener('load', () => {
-    setTimeout(() => {
-      ['time','duration','volume','playing'].forEach(api => postPlayerApi(frame, api));
-      // PlayerJS exposes `toolbar` to explicitly show its own toolbar as well.
-      postPlayerApi(frame, 'toolbar');
-    }, 400);
-  }, { once: true });
-
-  // Poll lightweight state because not every partner build emits every event.
-  const timer = setInterval(() => {
-    if (!document.body.contains(frame)) {
-      clearInterval(timer);
-      window.removeEventListener('message', onMessage);
-      return;
-    }
-    postPlayerApi(frame, 'time');
-    postPlayerApi(frame, 'duration');
-    postPlayerApi(frame, 'playing');
-  }, 1000);
-}
-
-function mountWebKinoboxSource(host, rows, selectedIndex = 0) {
-  if (!host || !rows.length) return;
-  const index = Math.max(0, Math.min(selectedIndex, rows.length - 1));
-  const selected = rows[index];
-  try { localStorage.setItem(WEB_PLAYER_SOURCE_PREF_KEY, selected.key); } catch {}
-  stopWebCollapsModernPlayer();
-
-  const isCollaps = selected.key === WEB_CLEAN_SOURCE_KEY || /collaps/i.test(selected.type) || /embess\.ws|delivembd\.ws/i.test(selected.iframeUrl);
-  if (!isCollaps) {
-    mountDirectWebSourceFrame(host, rows, index, selected);
-    return;
-  }
-
-  host.innerHTML = `
-    <div class="mv-web-source-shell mv-collaps-modern-shell">
-      <div class="mv-web-source-bar" role="tablist" aria-label="Источники видео">
-        ${rows.map((item, i) => `<button type="button" class="mv-web-source-chip${i === index ? ' is-active' : ''}" data-web-source-index="${i}" title="${esc(item.type)}">${esc(webSourceLabel(item, i))}</button>`).join('')}
-      </div>
-      <div class="mv-player-inline-note is-good"><span>✓</span> Collaps · расширенное управление MVPoisk</div>
-      <div class="mv-web-source-frame-wrap mv-collaps-modern-wrap">
-        <div class="embedded-player-loader mv-collaps-modern-loader" aria-hidden="true"><div class="spinner"></div><strong>Подключаем полный плеер…</strong><span>Громкость, перемотка, время, fullscreen, PiP и скорость</span></div>
-        <div class="mv-collaps-modern-host" data-collaps-modern-host></div>
-      </div>
-    </div>`;
-
-  host.querySelectorAll('[data-web-source-index]').forEach(button => {
-    button.addEventListener('click', () => {
-      const next = Number(button.dataset.webSourceIndex || 0);
-      mountWebKinoboxSource(host, rows, next);
-    });
-  });
-
-  const modernHost = host.querySelector('[data-collaps-modern-host]');
-  const loader = host.querySelector('.mv-collaps-modern-loader');
-  let fallbackStarted = false;
-  const fallbackToIframe = reason => {
-    if (fallbackStarted) return;
-    fallbackStarted = true;
-    console.warn('[MVPoisk Collaps modern fallback]', reason);
-    stopWebCollapsModernPlayer();
-    mountDirectWebSourceFrame(host, rows, index, selected, 'Расширенные элементы управления недоступны — открыт совместимый Collaps.');
-  };
-
-  mountCollapsModernPlayer({
-    container: modernHost,
-    kpId: currentMovie?.id,
-    sourceUrl: selected.iframeUrl,
-    title: currentMovie?.name || currentMovie?.alternativeName || 'MVPoisk',
-    historyEntry: currentMovie ? getHistoryEntry(currentMovie.id) : null,
-    onReady() {
-      if (fallbackStarted) return;
-      loader?.remove();
-      setPlayerStarting(false);
-      setPlayerStatus('Collaps подключён: доступны громкость, таймлайн, скорость, PiP и полный экран.', 'ready');
-    },
-    onProgress(patch) {
-      if (!currentMovie) return;
-      updatePlaybackProgress(currentMovie.id, patch);
-      updateWatchStateButtons();
-    },
-    onPlaylistItem(item) {
-      if (!currentMovie) return;
-      const patch = {};
-      if (Number.isFinite(Number(item?.season))) patch.season = Number(item.season);
-      if (Number.isFinite(Number(item?.episode))) patch.episode = Number(item.episode);
-      if (Object.keys(patch).length) updatePlaybackProgress(currentMovie.id, patch);
-    },
-    onVideoError(error) {
-      if (!fallbackStarted) fallbackToIframe(error?.message || error || 'player_error');
-    },
-  }).then(session => {
-    if (fallbackStarted || !modernHost?.isConnected) {
-      try { session?.destroy?.(); } catch {}
-      return;
-    }
-    webCollapsModernSession = session;
-  }).catch(error => fallbackToIframe(error));
-}
-
-async function startWebKinoboxPrimary(force = false) {
-  if (!currentMovie) return;
-  const { section, host } = playerElements();
-  if (!section || !host) return;
-  if (playerStarting && !force) return;
-
-  stopAlternatePlayer({ hide: true });
-  recordWatchStart(currentMovie, 'primary');
-  updateWatchStateButtons();
-  setPlayerStarting(true);
-  section.hidden = false;
-  requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-
-  if (!force && host.querySelector('.mv-web-source-frame')) {
-    setPlayerStarting(false);
-    setPlayerStatus('Плеер уже подключён.', 'ready');
-    return;
-  }
-
-  webKinoboxAbort?.abort();
-  const controller = new AbortController();
-  webKinoboxAbort = controller;
-  const timeout = setTimeout(() => controller.abort(), Math.max(8000, CONFIG.PLAYER_LOAD_TIMEOUT_MS));
-  host.innerHTML = '<div class="embedded-player-loader"><div class="spinner"></div><strong>Ищем доступные источники…</strong><span>MVPoisk ищет Collaps — чистый источник</span></div>';
-  setPlayerStatus('Ищем Collaps…', 'loading');
-
-  try {
-    const response = await fetch(kinoboxPlayerApiUrl(currentMovie.id), {
-      method: 'GET',
-      mode: 'cors',
-      credentials: 'omit',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) throw new Error(`Kinobox HTTP ${response.status}`);
-    const payload = await response.json();
-    const rows = normalizeKinoboxRows(payload);
-    if (!rows.length) throw new Error('No usable Kinobox sources');
-
-    const cleanRows = cleanCollapsRows(rows);
-    if (cleanRows.length) {
-      mountWebKinoboxSource(host, cleanRows, 0);
-      setPlayerStatus('Подключён Collaps — основной источник без замеченной рекламы.', 'ready');
-    } else {
-      renderCleanSourceUnavailable(host, rows);
-    }
-  } catch (error) {
-    console.warn('[MVPoisk web Kinobox primary]', error);
-    setPlayerStatus('Прямой список источников недоступен — подключаем совместимый плеер.', 'loading');
-    // Browser-side SDK fallback: still avoids any Cloudflare player proxy.
-    try {
-      await loadKinoboxSdk();
-      host.replaceChildren();
-      const slot = document.createElement('div');
-      slot.className = 'mv-kinobox-slot mv-kinobox-probe';
-      slot.dataset.kinopoisk = String(currentMovie.id);
-      slot.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
-      host.appendChild(slot);
-      alternateInstance = window.kinobox(slot, {
-        baseUrl: CONFIG.KINOBOX_BASE_URL,
-        search: { kinopoisk: String(currentMovie.id) },
-        menu: { enable: false },
-        params: { all: { noads: '1', onlyNoAds: '1' } },
-        notFoundMessage: 'Источники для этого фильма не найдены.',
-        events: {
-          playerLoaded(result) {
-            const rows = normalizeKinoboxRows(result);
-            const cleanRows = cleanCollapsRows(rows);
-            try { alternateInstance?.$destroy?.(); } catch {}
-            alternateInstance = null;
-            if (cleanRows.length) {
-              mountWebKinoboxSource(host, cleanRows, 0);
-              setPlayerStatus('Подключён Collaps — основной источник без замеченной рекламы.', 'ready');
-            } else {
-              renderCleanSourceUnavailable(host, rows);
-            }
-          }
-        }
-      });
-    } catch (fallbackError) {
-      console.warn('[MVPoisk web Kinobox SDK fallback]', fallbackError);
-      setPlayerStarting(false);
-      host.innerHTML = '<div class="alternate-player-error"><div class="player-fail-mark">!</div><strong>Плеер временно недоступен</strong><span>Попробуй повторить или открыть резервный источник.</span></div>';
-      setPlayerStatus('Не удалось подключить Kinobox.', 'error');
-    }
-  } finally {
-    clearTimeout(timeout);
-    if (webKinoboxAbort === controller) webKinoboxAbort = null;
-  }
-}
-
-async function startWebRendexFallback(force = false) {
-  if (!currentMovie) return;
-  const { section } = playerElements();
-  const { panel, host } = alternateElements();
-  if (!section || !panel || !host) return;
-  if (alternateStarting && !force) return;
-  const attemptId = ++alternateAttemptId;
-  setAlternateStarting(true);
-  section.hidden = false;
-  panel.hidden = false;
-  host.replaceChildren();
-  setAlternateStatus('Подключаем резервный Rendex…', 'loading');
-  requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
-
-  host.innerHTML = `<ins class="mv-rendex-slot" data-publisher-id="${esc(CONFIG.RENDEX_PUBLISHER_ID)}" data-type="kp" data-id="${esc(currentMovie.id)}"></ins>`;
-  const scan = () => {
-    const iframe = host.querySelector('iframe');
-    if (!iframe) return false;
-    iframe.classList.add('mv-embedded-iframe');
-    iframe.setAttribute('allowfullscreen', '');
-    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture; encrypted-media');
-    setAlternateStarting(false);
-    setAlternateStatus('Резервный Rendex подключён.', 'ready');
-    return true;
-  };
-  const observer = new MutationObserver(() => {
-    if (scan()) observer.disconnect();
-  });
-  observer.observe(host, { childList: true, subtree: true });
-  try {
-    await loadRendexSdk();
-    if (attemptId !== alternateAttemptId) return;
-    if (!scan() && force) {
-      const slot = host.querySelector('.mv-rendex-slot');
-      if (slot) slot.replaceWith(slot.cloneNode(true));
-    }
-    clearTimeout(alternateTimer);
-    alternateTimer = setTimeout(() => {
-      if (attemptId !== alternateAttemptId || scan()) return;
-      observer.disconnect();
-      setAlternateStarting(false);
-      setAlternateStatus('Rendex не ответил. Основной Kinobox остаётся доступен выше.', 'error');
-    }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
-  } catch (error) {
-    observer.disconnect();
-    setAlternateStarting(false);
-    console.warn('[MVPoisk Rendex fallback]', error);
-    setAlternateStatus('Rendex сейчас недоступен. Используй основной Kinobox.', 'error');
-  }
-}
-
 function playerElements() {
   return {
     section: document.querySelector('#embeddedPlayerSection'),
@@ -873,9 +371,6 @@ function markPlayerReady(iframe) {
 }
 
 function stopEmbeddedPlayer({ hide = true } = {}) {
-  stopWebCollapsModernPlayer();
-  webKinoboxAbort?.abort();
-  webKinoboxAbort = null;
   playerAttemptId += 1;
   playerObserver?.disconnect();
   clearTimeout(playerTimer);
@@ -902,157 +397,29 @@ function observePlayer(host) {
   playerObserver.observe(host, { childList: true, subtree: true });
 }
 
-function alternateElements() {
-  return {
-    panel: document.querySelector('#alternatePlayerPanel'),
-    host: document.querySelector('#alternatePlayerHost'),
-    status: document.querySelector('#alternatePlayerStatus'),
-    button: document.querySelector('[data-player-alternate]'),
-  };
-}
-
-function setAlternateStatus(message, state = 'loading') {
-  const { status } = alternateElements();
-  if (!status) return;
-  status.dataset.state = state;
-  status.innerHTML = state === 'loading'
-    ? `<span class="player-status-dot"></span><span>${esc(message)}</span>`
-    : state === 'ready'
-      ? `<span class="player-status-ok">✓</span><span>${esc(message)}</span>`
-      : `<span class="player-status-error">!</span><span>${esc(message)}</span>`;
-}
-
-function setAlternateStarting(value) {
-  alternateStarting = value;
-  const { button } = alternateElements();
-  if (!button) return;
-  button.disabled = value;
-  button.classList.toggle('is-loading', value);
-  button.textContent = value ? 'Ищем источники…' : 'Другой источник';
-}
-
-function loadKinoboxSdk() {
-  if (typeof window.kinobox === 'function') return Promise.resolve();
-  if (alternateScriptPromise) return alternateScriptPromise;
-  alternateScriptPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.async = true;
-    script.dataset.mvKinoboxSdk = '1';
-    script.src = CONFIG.KINOBOX_SDK_URL;
-    script.onload = () => typeof window.kinobox === 'function'
-      ? resolve()
-      : reject(new Error('Kinobox loaded without global function'));
-    script.onerror = () => {
-      alternateScriptPromise = null;
-      script.remove();
-      reject(new Error('Kinobox SDK blocked or unavailable'));
-    };
-    document.head.appendChild(script);
-  });
-  return alternateScriptPromise;
-}
-
-function stopAlternatePlayer({ hide = true } = {}) {
-  alternateAttemptId += 1;
-  clearTimeout(alternateTimer);
-  alternateTimer = null;
-  try { alternateInstance?.$destroy?.(); } catch {}
-  alternateInstance = null;
-  const { panel, host } = alternateElements();
-  host?.replaceChildren();
-  if (panel && hide) panel.hidden = true;
-  setAlternateStarting(false);
-}
-
 function closePlayerSection() {
   if (isTVMode() && document.body.classList.contains('tv-player-open')) {
     closeTvPlayerShell();
     return;
   }
-  stopAlternatePlayer({ hide: true });
   stopEmbeddedPlayer({ hide: true });
 }
 
-async function startAlternatePlayer(force = false) {
-  if (!isTVMode()) return startWebRendexFallback(force);
+async function startAlternatePlayer() {
   if (!currentMovie) return;
-  const { section } = playerElements();
-  const { panel, host } = alternateElements();
-  if (!section || !panel || !host) return;
-  if (alternateStarting && !force) return;
-
-  recordWatchStart(currentMovie, 'alternate');
+  recordWatchStart(currentMovie, 'partner');
   updateWatchStateButtons();
-  const attemptId = ++alternateAttemptId;
-  setAlternateStarting(true);
-
-  // Only one playback iframe should stay alive at a time. Removing the Rendex
-  // iframe stops its audio, but does not change how Rendex itself is integrated.
-  stopEmbeddedPlayer({ hide: false });
-  section.hidden = false;
-  panel.hidden = false;
-  if (isTVMode()) openTvPlayerShell('alternate');
-  host.replaceChildren();
-  setAlternateStatus('Ищем запасные источники…', 'loading');
-  if (!isTVMode()) requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
-
-  try {
-    await loadKinoboxSdk();
-    if (attemptId !== alternateAttemptId) return;
-
-    const slot = document.createElement('div');
-    slot.className = 'mv-kinobox-slot';
-    slot.dataset.kinopoisk = String(currentMovie.id);
-    host.appendChild(slot);
-
-    alternateInstance = window.kinobox(slot, {
-      baseUrl: CONFIG.KINOBOX_BASE_URL,
-      search: { kinopoisk: String(currentMovie.id) },
-      notFoundMessage: 'Запасные источники для этого фильма не найдены.',
-      events: {
-        playerLoaded(result) {
-          if (attemptId !== alternateAttemptId) return;
-          clearTimeout(alternateTimer);
-          const players = Array.isArray(result?.data)
-            ? result.data.filter(item => item && item.iframeUrl)
-            : [];
-          setAlternateStarting(false);
-          if (players.length) {
-            const word = players.length === 1 ? 'источник' : players.length < 5 ? 'источника' : 'источников';
-            setAlternateStatus(`Найдено ${players.length} ${word}. Переключение доступно внутри запасного плеера.`, 'ready');
-          } else {
-            const message = result?.error?.title || 'Запасные источники не найдены.';
-            setAlternateStatus(message, 'error');
-          }
-        }
-      }
-    });
-
-    alternateTimer = setTimeout(() => {
-      if (attemptId !== alternateAttemptId) return;
-      const iframe = host.querySelector('iframe');
-      if (iframe) {
-        setAlternateStarting(false);
-        setAlternateStatus('Запасной плеер подключён.', 'ready');
-      } else {
-        setAlternateStarting(false);
-        setAlternateStatus('Запасной сервис отвечает дольше обычного. Можно повторить или вернуться к основному источнику.', 'error');
-      }
-    }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
-  } catch (error) {
-    if (attemptId !== alternateAttemptId) return;
-    clearTimeout(alternateTimer);
-    setAlternateStarting(false);
-    console.warn('[MVPoisk alternate player]', error);
-    host.replaceChildren();
-    host.innerHTML = '<div class="alternate-player-error"><div class="player-fail-mark">!</div><strong>Запасной источник недоступен</strong><span>Основной плеер можно запустить снова одной кнопкой.</span></div>';
-    setAlternateStatus('Не удалось подключить запасной сервис.', 'error');
+  const url = getWatchUrl(currentMovie.id);
+  if (isWatchNoticeDismissed()) {
+    pendingWatchUrl = url;
+    openPartnerWatch(false);
+    return;
   }
+  openWatchNotice(url);
 }
 
 async function startPrimaryPlayer(force = false) {
-  stopAlternatePlayer({ hide: true });
-  if (!isTVMode()) return startWebKinoboxPrimary(force);
+  // v45: use the previously stable embedded Rendex/Vibix path on web and TV.
   return startEmbeddedPlayer(force);
 }
 
@@ -1101,8 +468,8 @@ async function startEmbeddedPlayer(force = false) {
       setPlayerStarting(false);
       host.classList.add('player-failed');
       const loader = host.querySelector('.embedded-player-loader');
-      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой просмотр у партнёра</span>';
-      setPlayerStatus('Встроенный плеер не ответил. Можно повторить или открыть просмотр у партнёра.', 'error');
+      if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Плеер не подключился</strong><span>Попробуй ещё раз или открой GGPoisk</span>';
+      setPlayerStatus('Встроенный плеер не ответил. Можно повторить или открыть GGPoisk.', 'error');
     }
   }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
 
@@ -1124,8 +491,8 @@ async function startEmbeddedPlayer(force = false) {
     console.warn('[MVPoisk player]', error);
     host.classList.add('player-failed');
     const loader = host.querySelector('.embedded-player-loader');
-    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>Резервный переход остаётся доступен сверху</span>';
-    setPlayerStatus('Сервис встроенного плеера сейчас недоступен. Используй резервный переход.', 'error');
+    if (loader) loader.innerHTML = '<div class="player-fail-mark">!</div><strong>Сервис плеера недоступен</strong><span>GGPoisk остаётся доступен сверху</span>';
+    setPlayerStatus('Сервис встроенного плеера сейчас недоступен. Используй GGPoisk.', 'error');
   }
 }
 
@@ -1134,9 +501,6 @@ function bindWatchAction() {
   button?.addEventListener('click', () => startPrimaryPlayer(false));
 
   document.querySelector('[data-player-retry]')?.addEventListener('click', () => startPrimaryPlayer(true));
-  document.querySelector('[data-player-alternate]')?.addEventListener('click', () => startAlternatePlayer(false));
-  document.querySelector('[data-alternate-retry]')?.addEventListener('click', () => startAlternatePlayer(true));
-  document.querySelector('[data-player-primary]')?.addEventListener('click', () => startPrimaryPlayer(true));
   document.querySelectorAll('[data-player-close]').forEach(button => button.addEventListener('click', closePlayerSection));
 
   document.querySelector('[data-watch-alternate-action]')?.addEventListener('click', () => startAlternatePlayer(false));
@@ -1277,7 +641,7 @@ function renderMovie(movie) {
             <button class="secondary-button list-action favorite-action" type="button" data-list-action="favorites" aria-pressed="false"></button>
             <button class="secondary-button watched-action" type="button" data-watched-action aria-pressed="false"><span>✓</span><span>Отметить просмотренным</span></button>
             <button class="secondary-button tv-more-action" type="button" data-tv-more aria-expanded="false"><span>⋯</span><span>Ещё</span></button>
-            <button class="secondary-button tv-alt-watch-action" type="button" data-watch-alternate-action><span>↻</span><span>Другой источник</span></button>
+            <button class="secondary-button ggpoisk-action" type="button" data-watch-alternate-action><span>↗</span><span>GGPoisk</span></button>
             <a class="secondary-button kp-link-button" href="https://www.kinopoisk.ru/film/${movie.id}/" target="_blank" rel="noopener noreferrer" aria-label="Открыть карточку фильма в Кинопоиске"><span class="kp-link-badge" aria-hidden="true"><img src="./icons/kinopoisk-mark.png" alt="" loading="lazy" decoding="async"></span><span class="kp-link-label">Кинопоиск</span><span class="kp-link-out" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 14L14 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8 6H14V12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a>
           </div>
                   </div>
@@ -1290,32 +654,16 @@ function renderMovie(movie) {
           <div>
             <span class="eyebrow">Просмотр</span>
             <h2>${esc(title)}</h2>
-            <p>${movie.isSeries ? 'На ПК и телефоне MVPoisk сначала выбирает Kinobox. Сезоны, серии и озвучки остаются внутри выбранного источника.' : 'На ПК и телефоне MVPoisk сначала выбирает Kinobox и ставит менее рекламные источники выше.'}</p>
+            <p>${movie.isSeries ? 'Основной плеер открывается прямо в MVPoisk. Сезоны, серии и озвучки выбираются внутри плеера.' : 'Основной плеер открывается прямо в MVPoisk. Если он не подходит, рядом есть переход в GGPoisk.'}</p>
           </div>
           <div class="embedded-player-actions">
             <button type="button" class="player-mini-button" data-player-retry>Повторить</button>
-            <button type="button" class="player-mini-button player-source-button" data-player-alternate>Резервный Rendex</button>
-            <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">Открыть у партнёра ↗</a>
+            <a class="player-mini-button player-mini-primary" data-partner-watch href="${esc(watchUrl)}" target="_blank" rel="noopener noreferrer">GGPoisk ↗</a>
             <button type="button" class="player-mini-button" data-player-close>Закрыть</button>
           </div>
         </div>
         <div class="embedded-player-stage" id="embeddedPlayerHost"></div>
         <div class="embedded-player-status" id="embeddedPlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Плеер ещё не запускался.</span></div>
-        <div class="alternate-player-panel" id="alternatePlayerPanel" hidden>
-          <div class="alternate-player-heading">
-            <div>
-              <span class="eyebrow">Резервный просмотр</span>
-              <h3>Rendex</h3>
-              <p>На ПК и телефоне используется только как резерв, если основной Kinobox не подходит.</p>
-            </div>
-            <div class="alternate-player-actions">
-              <button type="button" class="player-mini-button" data-alternate-retry>Повторить поиск</button>
-              <button type="button" class="player-mini-button player-mini-primary" data-player-primary>Вернуться к Kinobox</button>
-            </div>
-          </div>
-          <div class="alternate-player-host" id="alternatePlayerHost"></div>
-          <div class="embedded-player-status alternate-player-status" id="alternatePlayerStatus" data-state="loading"><span class="player-status-dot"></span><span>Резервный Rendex ещё не запускался.</span></div>
-        </div>
       </div>
     </section>
     <div class="movie-content">
