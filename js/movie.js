@@ -192,6 +192,9 @@ let resumeFrame = null;
 let resumeApplied = false;
 let kinoboxScriptPromise = null;
 let kinoboxProbeInstance = null;
+let primaryHealthTimer = null;
+let primaryHealthFrame = null;
+let primaryHealthStartedAt = 0;
 
 function watchButtonLabel() {
   if (!currentMovie) return 'Смотреть';
@@ -337,6 +340,19 @@ function queryPlayerState(frame) {
   postPlayerApi(frame, 'playlist_title');
 }
 
+function progressIsAtEnd(progress) {
+  if (!progress) return false;
+  const position = Number(progress.position);
+  const duration = Number(progress.duration);
+  const percent = Number(progress.percent);
+  if (Number.isFinite(percent) && percent >= 0.92) return true;
+  if (Number.isFinite(position) && Number.isFinite(duration) && duration >= 30) {
+    const remaining = duration - position;
+    return remaining <= Math.min(45, Math.max(18, duration * 0.06));
+  }
+  return false;
+}
+
 function resumableProgress() {
   if (!currentMovie) return null;
   const entry = getHistoryEntry(currentMovie.id);
@@ -344,7 +360,10 @@ function resumableProgress() {
   if (!progress || entry?.completed) return null;
   const position = Number(progress.position);
   if (!Number.isFinite(position) || position < 8) return null;
-  if (Number.isFinite(Number(progress.percent)) && Number(progress.percent) >= 0.93) return null;
+  // Never restore to the last seconds of a movie/episode. Rendex can persist
+  // that end position locally and then render a perfectly valid player UI
+  // with a black video frame, which looks like a loading failure.
+  if (progressIsAtEnd(progress)) return null;
   return progress;
 }
 
@@ -405,7 +424,57 @@ function startPlayerBridge(frame) {
   playerResumeTimer = setTimeout(() => maybeRestorePlayback(frame), 2600);
 }
 
+function clearPrimaryHealthWatch() {
+  clearTimeout(primaryHealthTimer);
+  primaryHealthTimer = null;
+  primaryHealthFrame = null;
+  primaryHealthStartedAt = 0;
+}
+
+function markPrimaryHealthy(frame) {
+  if (!frame || frame !== primaryHealthFrame) return;
+  clearPrimaryHealthWatch();
+}
+
+function startPrimaryHealthWatch(frame) {
+  clearPrimaryHealthWatch();
+  if (!frame || activePlayerMode !== 'primary') return;
+  primaryHealthFrame = frame;
+  primaryHealthStartedAt = Date.now();
+
+  // Ask the PlayerJS bridge a few times. A mounted iframe by itself is not
+  // proof that the actual video backend has initialized.
+  [700, 2600, 5600, 9000].forEach(delay => {
+    setTimeout(() => {
+      if (frame === primaryHealthFrame && frame.isConnected && activePlayerMode === 'primary') queryPlayerState(frame);
+    }, delay);
+  });
+
+  primaryHealthTimer = setTimeout(() => {
+    if (frame !== primaryHealthFrame || !frame.isConnected || activePlayerMode !== 'primary') return;
+    setPlayerStatus('Основной плеер завис на загрузке — подключаем запасной…', 'loading');
+    clearPrimaryHealthWatch();
+    startBackupEmbeddedPlayer({ automatic: true });
+  }, 13000);
+}
+
+function resetFinishedLocalPosition(frame) {
+  if (!currentMovie || !frame?.isConnected) return false;
+  const entry = getHistoryEntry(currentMovie.id);
+  const progress = entry?.progress || null;
+  if (!progress || !progressIsAtEnd(progress)) return false;
+
+  const playlistId = String(progress.playlistId || '').trim();
+  // If the provider remembered the exact end locally, force a sane start
+  // rather than leaving a black frame at duration/duration. For series we
+  // reopen the same known episode from 0; we never guess another episode id.
+  if (playlistId) postPlayerApi(frame, 'play', `id:${playlistId}[seek:0]`);
+  else postPlayerApi(frame, 'seek', 0);
+  return true;
+}
+
 function stopPlayerBridge() {
+  clearPrimaryHealthWatch();
   clearInterval(playerTelemetryTimer);
   clearTimeout(playerResumeTimer);
   playerTelemetryTimer = null;
@@ -443,6 +512,11 @@ function bindPlayerTelemetry() {
 
     const previous = getHistoryEntry(currentMovie.id)?.progress || {};
     const patch = {};
+    if (sourceMatches && activePlayerMode === 'primary') {
+      const hasDuration = Number.isFinite(parsed.duration) && parsed.duration >= 30;
+      const hasProgress = Number.isFinite(parsed.position) && parsed.position > 0.5;
+      if (hasDuration || hasProgress) markPrimaryHealthy(matchedFrame);
+    }
     if (Number.isFinite(parsed.duration) && parsed.duration >= 30 && parsed.duration <= 24 * 60 * 60) patch.duration = parsed.duration;
     const knownDuration = Number(patch.duration || previous.duration || 0);
     if (Number.isFinite(parsed.position) && parsed.position >= 0 && (!knownDuration || parsed.position <= knownDuration * 1.1)) patch.position = parsed.position;
@@ -460,6 +534,12 @@ function bindPlayerTelemetry() {
     // A real response from the mounted iframe means PlayerJS is ready enough
     // to accept the cross-device resume command.
     maybeRestorePlayback(matchedFrame);
+    if (activePlayerMode === 'primary' && Number.isFinite(parsed.duration) && Number.isFinite(parsed.position)) {
+      const remaining = parsed.duration - parsed.position;
+      if (parsed.duration >= 30 && remaining <= 2 && progressIsAtEnd(previous)) {
+        resetFinishedLocalPosition(matchedFrame);
+      }
+    }
 
     const meaningful = detected.some(key => !['playerMode', 'playerSource'].includes(key));
     if (!meaningful) return;
@@ -497,7 +577,7 @@ function setPlayerStatus(message, state = 'loading') {
 }
 
 
-// MVPoisk playback/account sync fix v50
+// MVPoisk player reliability fix v51 (keeps v50 account sync)
 const BACKUP_SOURCE_PRIORITY = ['kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha', 'collaps'];
 const BACKUP_SOURCE_BLOCKED = new Set(['turbo', 'obrut']);
 
@@ -785,6 +865,7 @@ function markPlayerReady(iframe) {
   activePlayerMode = 'primary';
   activePlayerSource = 'rendex';
   startPlayerBridge(iframe);
+  startPrimaryHealthWatch(iframe);
   updateBackupButton();
   setPlayerStatus('Плеер подключён. Если увидишь чёрный экран — нажми «Запасной».', 'ready');
   iframe.addEventListener('load', () => {
@@ -796,7 +877,12 @@ function markPlayerReady(iframe) {
       return;
     }
     startPlayerBridge(iframe);
-    setPlayerStatus('Плеер загружен. Если экран остаётся чёрным — нажми «Запасной».', 'ready');
+    startPrimaryHealthWatch(iframe);
+    // Give the provider a chance to override its own browser-local end position.
+    setTimeout(() => {
+      if (activePlayerMode === 'primary' && iframe.isConnected) resetFinishedLocalPosition(iframe);
+    }, 2200);
+    setPlayerStatus('Плеер загружен. Проверяем видеопоток…', 'ready');
   }, { once: true });
 }
 function stopEmbeddedPlayer({ hide = true } = {}) {
@@ -880,6 +966,7 @@ async function startPreferredPlayer() {
 
 async function startEmbeddedPlayer(force = false) {
   if (!currentMovie) return;
+  clearPrimaryHealthWatch();
   const { section, host } = playerElements();
   if (!section || !host) return;
 
@@ -934,8 +1021,8 @@ async function startEmbeddedPlayer(force = false) {
   // scan on slower/mobile browsers. Give the same primary source one clean
   // rescan before falling back. Total waiting time stays roughly the same as
   // before, so this does not make a broken page hang for longer.
-  const firstWait = Math.min(Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000), 8500);
-  const secondWait = Math.max(3500, Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000) - firstWait);
+  const firstWait = Math.min(Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000), 7000);
+  const secondWait = Math.max(4000, Math.min(5000, Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000) - firstWait));
   playerTimer = setTimeout(() => {
     if (attemptId !== playerAttemptId || host.querySelector('iframe')) return;
     const slot = host.querySelector('.mv-rendex-slot');
