@@ -9,6 +9,7 @@ import {
   saveProfile,
 } from './storage.js?v=47';
 
+// MVPoisk cloud progress merge/sync fix v50
 const WEB_SESSION_KEY = 'mvpoisk:web-session:v1';
 const TV_DEVICE_KEY = 'mvpoisk:tv-device:v1';
 const TV_PAIRING_KEY = 'mvpoisk:tv-pairing:v1';
@@ -26,6 +27,8 @@ let initialized = false;
 let initPromise = null;
 let syncTimer = null;
 let syncing = false;
+let syncQueued = false;
+let periodicSyncTimer = null;
 let lastSyncMessage = 'Локальные данные';
 
 function readJson(key, fallback, storage = localStorage) {
@@ -126,6 +129,62 @@ function mergeById(localItems = [], remoteItems = [], timestampField = 'savedAt'
   return [...merged.values()].sort((a, b) => Number(b?.[timestampField] || 0) - Number(a?.[timestampField] || 0));
 }
 
+function progressTime(item) {
+  const direct = Number(item?.progress?.updatedAt || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  return Number(item?.lastWatchedAt || 0);
+}
+
+function mergeHistoryEntry(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+
+  const aMetaAt = Number(a?.lastWatchedAt || 0);
+  const bMetaAt = Number(b?.lastWatchedAt || 0);
+  const newerMeta = bMetaAt >= aMetaAt ? b : a;
+  const olderMeta = newerMeta === b ? a : b;
+
+  const aProgressAt = progressTime(a);
+  const bProgressAt = progressTime(b);
+  let newerProgress = bProgressAt >= aProgressAt ? b?.progress : a?.progress;
+  const olderProgress = newerProgress === b?.progress ? a?.progress : b?.progress;
+
+  // Legacy entries may have identical timestamps. For the same episode/file,
+  // prefer the furthest valid position rather than accidentally moving backward.
+  if (aProgressAt === bProgressAt && a?.progress && b?.progress) {
+    const aId = String(a.progress.playlistId || '');
+    const bId = String(b.progress.playlistId || '');
+    const sameItem = (!aId && !bId) || aId === bId;
+    if (sameItem && Number(b.progress.position || 0) > Number(a.progress.position || 0)) newerProgress = b.progress;
+  }
+
+  const mergedProgress = {
+    ...(olderProgress || {}),
+    ...(newerProgress || {}),
+  };
+  const merged = {
+    ...(olderMeta || {}),
+    ...(newerMeta || {}),
+    progress: mergedProgress,
+  };
+
+  // Playback source must follow the progress we kept, not a newer button click
+  // from another device that has not actually played anything yet.
+  if (mergedProgress?.playerMode === 'backup') merged.source = 'backup';
+  else if (mergedProgress?.playerMode === 'primary') merged.source = 'primary';
+  return merged;
+}
+
+function mergeHistory(localItems = [], remoteItems = []) {
+  const merged = new Map();
+  for (const item of [...remoteItems, ...localItems]) {
+    const id = Number(item?.id);
+    if (!Number.isFinite(id)) continue;
+    merged.set(id, mergeHistoryEntry(merged.get(id), item));
+  }
+  return [...merged.values()].sort((a, b) => Number(b?.lastWatchedAt || 0) - Number(a?.lastWatchedAt || 0));
+}
+
 function mergeStates(localState, remoteState) {
   const local = cleanState(localState);
   const remote = cleanState(remoteState);
@@ -136,7 +195,7 @@ function mergeStates(localState, remoteState) {
     profile: localProfileAt >= remoteProfileAt ? (local.profile || remote.profile) : (remote.profile || local.profile),
     watchLater: mergeById(local.watchLater, remote.watchLater, 'savedAt').slice(0, 250),
     favorites: mergeById(local.favorites, remote.favorites, 'savedAt').slice(0, 250),
-    history: mergeById(local.history, remote.history, 'lastWatchedAt').slice(0, 300),
+    history: mergeHistory(local.history, remote.history).slice(0, 300),
   };
 }
 
@@ -205,11 +264,22 @@ async function writeCloudState(state) {
 }
 
 export async function pushLocalState({ quiet = false } = {}) {
-  if (!hasCloudIdentity() || syncing) return null;
+  if (!hasCloudIdentity()) return null;
+  if (syncing) {
+    syncQueued = true;
+    return null;
+  }
   syncing = true;
   if (!quiet) { lastSyncMessage = 'Синхронизация…'; emit({ sync: 'syncing' }); }
   try {
-    const data = await writeCloudState(exportLocalState());
+    // Read-before-write prevents a second device with an older local snapshot
+    // from erasing a newer playback position that is already in the account.
+    const local = exportLocalState();
+    const row = await fetchCloudRow();
+    const state = row?.state ? mergeStates(local, cleanState(row.state)) : local;
+    if (row?.state) applyLocalState(state, { synced: false });
+
+    const data = await writeCloudState(state);
     markCloudSynced(data?.updated_at || '');
     lastSyncMessage = 'Синхронизировано';
     emit({ sync: 'done' });
@@ -221,11 +291,20 @@ export async function pushLocalState({ quiet = false } = {}) {
     return null;
   } finally {
     syncing = false;
+    if (syncQueued && hasCloudIdentity()) {
+      syncQueued = false;
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => pushLocalState({ quiet: true }), 120);
+    }
   }
 }
 
 export async function syncFromCloud({ quiet = false } = {}) {
-  if (!hasCloudIdentity() || syncing) return;
+  if (!hasCloudIdentity()) return;
+  if (syncing) {
+    syncQueued = true;
+    return;
+  }
   syncing = true;
   if (!quiet) { lastSyncMessage = 'Синхронизация…'; emit({ sync: 'syncing' }); }
   try {
@@ -282,13 +361,23 @@ export async function syncFromCloud({ quiet = false } = {}) {
     if (!quiet) console.warn('MVPoisk cloud sync:', error);
   } finally {
     syncing = false;
+    if (syncQueued && hasCloudIdentity()) {
+      syncQueued = false;
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => pushLocalState({ quiet: true }), 120);
+    }
   }
 }
 
-function schedulePush() {
+function schedulePush(delay = 900) {
   if (!hasCloudIdentity()) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => pushLocalState({ quiet: true }), 900);
+  syncTimer = setTimeout(() => pushLocalState({ quiet: true }), Math.max(0, Number(delay) || 0));
+}
+
+function localStateIsDirty() {
+  const meta = getCloudSyncMeta();
+  return Number(meta.localUpdatedAt || 0) > Number(meta.lastSyncedLocalUpdatedAt || 0);
 }
 
 function installSyncListeners() {
@@ -299,8 +388,21 @@ function installSyncListeners() {
     if (hasCloudIdentity()) syncFromCloud({ quiet: true });
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && hasCloudIdentity()) syncFromCloud({ quiet: true });
+    if (!hasCloudIdentity()) return;
+    if (document.visibilityState === 'visible') {
+      syncFromCloud({ quiet: true });
+    } else if (localStateIsDirty()) {
+      // Start the request before mobile browsers suspend the page.
+      schedulePush(0);
+    }
   });
+
+  clearInterval(periodicSyncTimer);
+  periodicSyncTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && hasCloudIdentity() && localStateIsDirty()) {
+      pushLocalState({ quiet: true });
+    }
+  }, 15000);
 }
 
 function extractAuthFragment() {

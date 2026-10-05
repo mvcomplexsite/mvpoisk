@@ -2,6 +2,7 @@ import { getMovie, getReviews, getSimilarMovies } from './api.js?v=47';
 import { CONFIG, getWatchUrl } from './config.js?v=47';
 import { imageUrl, imageAttrs, bindImageFallbacks } from './images.js?v=47';
 import { hasInList, toggleInList, isWatchNoticeDismissed, dismissWatchNotice, getHistoryEntry, recordWatchStart, toggleWatched, updatePlaybackProgress } from './storage.js?v=47';
+import { syncFromCloud } from './account.js?v=47';
 
 const root = document.querySelector('#movieRoot');
 const params = new URLSearchParams(location.search);
@@ -427,7 +428,17 @@ function bindPlayerTelemetry() {
     const sourceMatches = Boolean(matchedFrame);
     const parsed = parsePlayerMessage(event.data);
     if (!parsed) return;
-    const recognizedKind = /(time|progress|playback|player|episode|season|ended|complete|playlist|file|track|duration)/i.test(parsed.kind || '');
+    const kind = String(parsed.kind || '');
+
+    // The Rendex/Vibix embed can explicitly report that content failed to load.
+    // Do not leave a dead/black primary iframe on screen in that case.
+    if (sourceMatches && kind === 'mvpoisk-clean-content-error' && activePlayerMode === 'primary') {
+      setPlayerStatus('Основной плеер не смог открыть видео — подключаем запасной…', 'loading');
+      startBackupEmbeddedPlayer({ automatic: true });
+      return;
+    }
+
+    const recognizedKind = /(time|progress|playback|player|episode|season|ended|complete|playlist|file|track|duration)/i.test(kind);
     if (!sourceMatches && !recognizedKind) return;
 
     const previous = getHistoryEntry(currentMovie.id)?.progress || {};
@@ -486,6 +497,7 @@ function setPlayerStatus(message, state = 'loading') {
 }
 
 
+// MVPoisk playback/account sync fix v50
 const BACKUP_SOURCE_PRIORITY = ['kodik', 'vibix', 'hdvb', 'voidboost', 'ashdi', 'cdnmovies', 'videocdn', 'alloha', 'collaps'];
 const BACKUP_SOURCE_BLOCKED = new Set(['turbo', 'obrut']);
 
@@ -531,25 +543,6 @@ function normalizeBackupSources(payload) {
     });
 }
 
-const SAFE_PLAYER_SANDBOX = [
-  'allow-scripts',
-  'allow-same-origin',
-  'allow-forms',
-  'allow-presentation',
-  'allow-modals',
-  'allow-pointer-lock',
-].join(' ');
-
-function hardenPlayerIframe(iframe) {
-  if (!iframe) return;
-  // Keep everything the video player normally needs, but deliberately do not
-  // grant popup or top-navigation capabilities. This blocks the common
-  // "tap Play -> advertising tab/site" behaviour without touching the
-  // provider's scripts, HLS, playlist or playback API.
-  iframe.setAttribute('sandbox', SAFE_PLAYER_SANDBOX);
-  iframe.setAttribute('referrerpolicy', 'origin-when-cross-origin');
-}
-
 function cleanBackupPlayerUrl(rawUrl) {
   // Keep the partner-provided iframe URL byte-for-byte. Some backup providers
   // sign the full query string, so adding our own parameters can break playback.
@@ -585,9 +578,8 @@ function mountBackupSource(host, index = 0) {
       allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
       allowfullscreen
       referrerpolicy="origin-when-cross-origin"
-      sandbox="${SAFE_PLAYER_SANDBOX}"></iframe>`;
+      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-modals allow-popups"></iframe>`;
   const frame = host.querySelector('.mv-backup-player-frame');
-  hardenPlayerIframe(frame);
   frame?.addEventListener('load', () => {
     setPlayerStarting(false);
     setPlayerStatus(`Запасной источник ${source.type} загружен. Если экран пустой — нажми «Другой источник».`, 'ready');
@@ -779,9 +771,6 @@ function setPlayerStarting(value) {
 
 function markPlayerReady(iframe) {
   if (!iframe || iframe.dataset.mvPlayerReady === '1') return;
-  // Rendex creates its own iframe, so apply the same conservative sandbox as
-  // soon as it appears in our player host. No ad URLs are filtered here.
-  hardenPlayerIframe(iframe);
   const { host } = playerElements();
   host?.classList.remove('player-failed');
   iframe.dataset.mvPlayerReady = '1';
@@ -875,6 +864,13 @@ async function startPrimaryPlayer(force = false) {
 
 async function startPreferredPlayer() {
   if (!currentMovie) return;
+
+  // Pull the latest account state right before playback. This is important on a
+  // second device: page initialization and Telegram/D1 sync can finish after
+  // the movie card itself has already rendered. Offline/errors remain harmless
+  // because syncFromCloud() falls back to the local state.
+  try { await syncFromCloud({ quiet: true }); } catch {}
+
   const entry = getHistoryEntry(currentMovie.id);
   if (entry?.source === 'backup') {
     return startBackupEmbeddedPlayer({ preferredSource: entry?.progress?.playerSource || '' });
@@ -927,14 +923,27 @@ async function startEmbeddedPlayer(force = false) {
   setPlayerStatus('Подключаем видео…', 'loading');
   observePlayer(host);
 
+  const fallbackFromPrimary = () => {
+    if (attemptId !== playerAttemptId || host.querySelector('iframe')) return;
+    playerObserver?.disconnect();
+    setPlayerStatus('Основной плеер не ответил — подключаем запасной…', 'loading');
+    startBackupEmbeddedPlayer({ automatic: true });
+  };
+
+  // Rendex occasionally loads its SDK successfully but misses the first <ins>
+  // scan on slower/mobile browsers. Give the same primary source one clean
+  // rescan before falling back. Total waiting time stays roughly the same as
+  // before, so this does not make a broken page hang for longer.
+  const firstWait = Math.min(Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000), 8500);
+  const secondWait = Math.max(3500, Number(CONFIG.PLAYER_LOAD_TIMEOUT_MS || 15000) - firstWait);
   playerTimer = setTimeout(() => {
-    if (attemptId !== playerAttemptId) return;
-    if (!host.querySelector('iframe')) {
-      playerObserver?.disconnect();
-      setPlayerStatus('Основной плеер не ответил — подключаем запасной…', 'loading');
-      startBackupEmbeddedPlayer({ automatic: true });
-    }
-  }, CONFIG.PLAYER_LOAD_TIMEOUT_MS);
+    if (attemptId !== playerAttemptId || host.querySelector('iframe')) return;
+    const slot = host.querySelector('.mv-rendex-slot');
+    if (!slot) return fallbackFromPrimary();
+    setPlayerStatus('Основной плеер отвечает медленно — повторяем подключение…', 'loading');
+    slot.replaceWith(slot.cloneNode(true));
+    playerTimer = setTimeout(fallbackFromPrimary, secondWait);
+  }, firstWait);
 
   try {
     await loadRendexSdk();
